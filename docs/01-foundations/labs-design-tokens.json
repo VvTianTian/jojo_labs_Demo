@@ -1,0 +1,173 @@
+{
+  "color": {
+    "primary": {
+      "labs-primary-1": { "$type": "color", "$value": "#EBF9FF", "description": "主色背景" },
+      "labs-primary-2": { "$type": "color", "$value": "#DBF3FF", "description": "主色辅助浅色" },
+      "labs-primary-3": { "$type": "color", "$value": "#87D7FF", "description": "主色描边" },
+      "labs-primary-4": { "$type": "color", "$value": "#33BBFF", "description": "主色悬停" },
+      "labs-primary-5": { "$type": "color", "$value": "#0090D9", "description": "主色-常规" },
+      "labs-primary-6": { "$type": "color", "$value": "#0082C3", "description": "主色点击" },
+      "labs-primary-7": { "$type": "color", "$value": "#004161", "description": "主色-文字色" },
+      "labs-primary-focus": {
+        "$type": "composition",
+        "$value": {
+          "border": "1px solid #0090D9",
+          "boxShadow": "0px 0px 0px 2px #DBF3FF",
+          "borderRadius": "8px"
+        },
+        "description": "主色 focus 样式"
+      }
+    },
+    "success": {
+      "labs-success-1": { "$type": "color", "$value": "#EFFAEB", "description": "成功色背景" },
+      "labs-success-2": { "$type": "color", "$value": "#D2F7C6", "description": "成功色辅助浅色" },
+      "labs-success-3": { "$type": "color", "$value": "#A0D98D", "description": "成功色描边" },
+      "labs-success-4": { "$type": "color", "$value": "#5DC43B", "description": "成功色悬停" },
+      "labs-success-5": { "$type": "color", "$value": "#39BF1E", "description": "成功色-常规" },
+      "labs-success-6": { "$type": "color", "$value": "#44A12D", "description": "成功色点击" },
+      "labs-success-7": { "$type": "color", "$value": "#155200", "description": "成功色-文字色" }
+    },
+    "warning": {
+      "labs-warning-1": { "$type": "color", "$value": "#FCF9DE", "description": "警告色背景" },
+      "labs-warning-2": { "$type": "color", "$value": "#FCE3BA", "description": "警告色辅助浅色" },
+      "labs-warning-3": { "$type": "color", "$value": "#FFEB6B", "description": "警告色描边" },
+      "labs-warning-4": { "$type": "color", "$value": "#FCD400", "description": "警告色悬停" },
+      "labs-warning-5": { "$type": "color", "$value": "#FFC506", "description": "警告色-常规" },
+      "labs-warning-6": { "$type": "color", "$value": "#DBAF00", "description": "警告色点击" },
+      "labs-warning-7": { "$type": "color", "$value": "#554300", "description": "警告色-文字色" }
+    },
+    "danger": {
+      "labs-danger-1": { "$type": "color", "$value": "#FFF2F0", "description": "危险色背景" },
+      "labs-danger-2": { "$type": "color", "$value": "#FFDAD4", "description": "危险色辅助浅色" },
+      "labs-danger-3": { "$type": "color", "$value": "#FF9C8C", "description": "危险色描边" },
+      "labs-danger-4": { "$type": "color", "$value": "#FF715C", "description": "危险色悬停" },
+      "labs-danger-5": { "$type": "color", "$value": "#EF4C32", "description": "危险色-常规" },
+      "labs-danger-6": { "$type": "color", "$value": "#CC2F16", "description": "危险色点击" },
+      "labs-danger-7": { "$type": "color", "$value": "#781A0C", "description": "危险色-文字色" }
+    },
+    "text": {
+      "labs-text-1": { "$type": "color", "$value": "#353D42", "description": "主要文字" },
+      "labs-text-2": { "$type": "color", "$value": "#5D6468", "description": "次要文字" },
+      "labs-text-3": { "$type": "color", "$value": "#8E9395", "description": "提示文字" },
+      "labs-text-4": { "$type": "color", "$value": "#B0B3B5", "description": "禁用文字" }
+    },
+    "bg": {
+      "labs-bg-1": { "$type": "color", "$value": "#FFFFFF", "description": "容器背景" },
+      "labs-bg-2": { "$type": "color", "$value": "#F4F8FA", "description": "基础背景" },
+      "labs-bg-3": { "$type": "color", "$value": "#F7F7F8", "description": "禁用背景" },
+      "labs-bg-4": { "$type": "color", "$value": "#E6EEF2", "description": "分割线" },
+      "labs-bg-5": { "$type": "color", "$value": "#D8E4EB", "description": "描边色" }
+    },
+    "transparent": {
+      "labs-b-black-0.4": { "$type": "color", "$value": "#00000066", "description": "0.4 遮罩" },
+      "labs-b-white-0.4": { "$type": "color", "$value": "#FFFFFF66", "description": "0.4 白遮罩" }
+    }
+  },
+  "typography": {
+    "heading-20m": {
+      "$type": "typography",
+      "$value": { "fontSize": "20px", "lineHeight": "30px", "fontWeight": 500, "fontFamily": "PingFang SC" }
+    },
+    "heading-18m": {
+      "$type": "typography",
+      "$value": { "fontSize": "18px", "lineHeight": "28px", "fontWeight": 500, "fontFamily": "PingFang SC" }
+    },
+    "heading-16m": {
+      "$type": "typography",
+      "$value": { "fontSize": "16px", "lineHeight": "24px", "fontWeight": 500, "fontFamily": "PingFang SC" }
+    },
+    "heading-16r": {
+      "$type": "typography",
+      "$value": { "fontSize": "16px", "lineHeight": "24px", "fontWeight": 400, "fontFamily": "PingFang SC" }
+    },
+    "body-14m": {
+      "$type": "typography",
+      "$value": { "fontSize": "14px", "lineHeight": "22px", "fontWeight": 500, "fontFamily": "PingFang SC" }
+    },
+    "body-14r": {
+      "$type": "typography",
+      "$value": { "fontSize": "14px", "lineHeight": "22px", "fontWeight": 400, "fontFamily": "PingFang SC" }
+    },
+    "small-12m": {
+      "$type": "typography",
+      "$value": { "fontSize": "12px", "lineHeight": "20px", "fontWeight": 500, "fontFamily": "PingFang SC" }
+    },
+    "small-12r": {
+      "$type": "typography",
+      "$value": { "fontSize": "12px", "lineHeight": "20px", "fontWeight": 400, "fontFamily": "PingFang SC" }
+    },
+    "icon-14": {
+      "$type": "typography",
+      "$value": { "fontSize": "14px", "lineHeight": "22px", "fontWeight": 400, "fontFamily": "SF Pro" }
+    },
+    "icon-12": {
+      "$type": "typography",
+      "$value": { "fontSize": "12px", "lineHeight": "16px", "fontWeight": 400, "fontFamily": "SF Pro" }
+    },
+    "icon-10": {
+      "$type": "typography",
+      "$value": { "fontSize": "10px", "lineHeight": "16px", "fontWeight": 400, "fontFamily": "SF Pro" }
+    }
+  },
+  "spacing": {
+    "spaceL": { "$type": "dimension", "$value": "24px", "description": "间距、Modal 对话框边距" },
+    "spaceMS": { "$type": "dimension", "$value": "20px", "description": "次大间距" },
+    "spaceM": { "$type": "dimension", "$value": "16px", "description": "容器常规 Padding" },
+    "spaceS": { "$type": "dimension", "$value": "12px", "description": "模块间距" },
+    "spaceXS": { "$type": "dimension", "$value": "8px", "description": "按钮间距" },
+    "spaceXXS": { "$type": "dimension", "$value": "4px", "description": "标签间距" }
+  },
+  "radius": {
+    "radiusLabs": { "$type": "dimension", "$value": "10px", "description": "Labs 通用圆角" },
+    "radiusL": { "$type": "dimension", "$value": "24px", "description": "大型容器圆角" },
+    "radiusXS": { "$type": "dimension", "$value": "8px", "description": "小号按钮圆角" },
+    "radiusXXS": { "$type": "dimension", "$value": "4px", "description": "标签圆角" }
+  },
+  "shadow": {
+    "focusPrimary": {
+      "$type": "shadow",
+      "$value": { "color": "#DBF3FF", "offsetX": "0px", "offsetY": "0px", "blur": "0px", "spread": "2px" },
+      "description": "主色聚焦高亮"
+    },
+    "focusError": {
+      "$type": "shadow",
+      "$value": { "color": "#FFE2DE", "offsetX": "0px", "offsetY": "0px", "blur": "0px", "spread": "2px" },
+      "description": "错误聚焦高亮"
+    },
+    "boxShadowMenu": {
+      "$type": "shadow",
+      "$value": { "color": "#0000001A", "offsetX": "0px", "offsetY": "4px", "blur": "8px", "spread": "0px" },
+      "description": "下拉菜单投影"
+    },
+    "boxShadowModal": {
+      "$type": "shadow",
+      "$value": { "color": "#0000001F", "offsetX": "0px", "offsetY": "10px", "blur": "60px", "spread": "0px" },
+      "description": "弹窗通用投影"
+    },
+    "boxShadowUp": {
+      "$type": "shadow",
+      "$value": { "color": "#00000026", "offsetX": "0px", "offsetY": "-2px", "blur": "8px", "spread": "0px" },
+      "description": "上边固定栏投影"
+    },
+    "boxShadowDown": {
+      "$type": "shadow",
+      "$value": { "color": "#00000026", "offsetX": "0px", "offsetY": "2px", "blur": "8px", "spread": "0px" },
+      "description": "底边固定栏投影"
+    },
+    "boxShadowLeft": {
+      "$type": "shadow",
+      "$value": { "color": "#00000026", "offsetX": "-2px", "offsetY": "0px", "blur": "8px", "spread": "0px" },
+      "description": "左侧固定栏投影"
+    },
+    "boxShadowRight": {
+      "$type": "shadow",
+      "$value": { "color": "#00000026", "offsetX": "2px", "offsetY": "0px", "blur": "8px", "spread": "0px" },
+      "description": "右侧固定栏投影"
+    },
+    "boxShadowFloatingCard": {
+      "$type": "shadow",
+      "$value": { "color": "#00000008", "offsetX": "0px", "offsetY": "2px", "blur": "4px", "spread": "0px" },
+      "description": "浮动卡片投影"
+    }
+  }
+}

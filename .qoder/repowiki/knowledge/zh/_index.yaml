@@ -1,0 +1,25 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: Q0DeR-MaG1C-BrAnCh-Fo2-NoN-GiT-Or-No-C0MmIt
+exported_at: "2026-06-17T08:48:01Z"
+modules:
+    "":
+        dir_name: 绘本编辑器
+        title: 绘本编辑器
+        scope:
+            - README.md
+            - .gitignore
+            - package.json
+            - package-lock.json
+            - tsconfig.json
+            - tsconfig.app.json
+            - tsconfig.node.json
+            - vite.config.ts
+            - eslint.config.js
+            - index.html
+            - src/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
