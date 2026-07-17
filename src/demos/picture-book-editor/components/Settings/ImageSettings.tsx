@@ -1,11 +1,8 @@
 import { useBookStore } from "../../store/useBookStore";
-import { useRoleStore } from "../../store/useRoleStore";
 import { MapPin, X } from "lucide-react";
 
 export function ImageSettings() {
   const { book, updatePageImage } = useBookStore();
-  const { currentRole } = useRoleStore();
-  const isEditorial = currentRole === "editorial";
   const currentPage = book.pages[book.currentPageIndex];
 
   if (!currentPage) return null;
@@ -28,15 +25,12 @@ export function ImageSettings() {
               alt="页面图片"
               className="w-full aspect-video object-cover"
             />
-            {/* 删除按钮仅制作角色可见 */}
-            {!isEditorial && (
-              <button
-                onClick={() => updatePageImage(currentPage.id, null)}
-                className="absolute top-1.5 right-1.5 p-1 bg-error-50 text-error-600 rounded-full hover:bg-error-100 transition-all"
-              >
-                <X size={12} />
-              </button>
-            )}
+            <button
+              onClick={() => updatePageImage(currentPage.id, null)}
+              className="absolute top-1.5 right-1.5 p-1 bg-error-50 text-error-600 rounded-full hover:bg-error-100 transition-all"
+            >
+              <X size={12} />
+            </button>
           </div>
         )}
 

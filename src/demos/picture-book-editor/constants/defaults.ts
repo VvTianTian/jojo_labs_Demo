@@ -18,8 +18,6 @@ export const FONT_OPTIONS = [
   { label: "Inter", value: "Inter" },
 ];
 
-export const FONT_SIZE_OPTIONS = [14, 16, 18, 20, 24, 28, 32];
-
 export function createDefaultBook(): Book {
   return {
     id: crypto.randomUUID(),
@@ -30,7 +28,11 @@ export function createDefaultBook(): Book {
       title: DEFAULT_BOOK_TITLE,
       author: "",
       synopsis: "",
+      lexile: "",
+      isFictional: "",
       imageRequirement: "",
+      narrationAudioUrl: null,
+      narrationTiming: "start",
     },
     globalSettings: {
       defaultFontFamily: "PingFang SC, Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -51,18 +53,13 @@ export function createDefaultBook(): Book {
           },
         ],
         hotspots: [],
-        audioUrl: null,
-        settings: {
-          backgroundColor: null,
-          fontSize: null,
-          textAlign: null,
-        },
+        narrationAudioUrl: null,
+        narrationAudioRequirement: "",
+        narrationTiming: "start",
         imageRequirement: "",
-        audioRequirement: "",
       },
     ],
     currentPageIndex: -1,
-    viewMode: "canvas",
     selection: { type: "none" },
   };
 }

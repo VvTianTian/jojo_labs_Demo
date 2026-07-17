@@ -1,6 +1,4 @@
 export type CoverLayout = "fullscreen" | "split";
-export type ViewMode = "canvas" | "narration";
-export type EditorRole = "editorial" | "production";
 
 export interface Cover {
   layout: CoverLayout;
@@ -8,13 +6,11 @@ export interface Cover {
   title: string;
   author: string;
   synopsis: string;
+  lexile: string;
+  isFictional: string;
   imageRequirement: string;
-}
-
-export interface PageSettings {
-  backgroundColor: string | null;
-  fontSize: number | null;
-  textAlign: "left" | "center" | "right" | null;
+  narrationAudioUrl: string | null;
+  narrationTiming: "start" | "end";
 }
 
 export interface GlobalSettings {
@@ -48,10 +44,10 @@ export interface Page {
   imageUrl: string | null;
   textBlocks: TextBlock[];
   hotspots: Hotspot[];
-  audioUrl: string | null; // 页间讲解语音
-  settings: PageSettings;
+  narrationAudioUrl: string | null; // 每页讲解语音
+  narrationAudioRequirement: string; // 讲解语音需求描述
+  narrationTiming: "start" | "end";  // 播放时机
   imageRequirement: string;
-  audioRequirement: string;
 }
 
 /** 选中状态：当前编辑的元素类型 */
@@ -69,6 +65,5 @@ export interface Book {
   globalSettings: GlobalSettings;
   pages: Page[];
   currentPageIndex: number; // -1 = cover view
-  viewMode: ViewMode;
   selection: Selection;
 }

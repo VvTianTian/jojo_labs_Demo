@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type {
-  Book, Cover, GlobalSettings, PageSettings,
+  Book, Cover, GlobalSettings,
   TextBlock, Hotspot, Selection,
 } from "../types/book";
 import { createDefaultBook } from "../constants/defaults";
@@ -15,14 +15,14 @@ interface BookStore {
   updateCover: (cover: Partial<Cover>) => void;
   // Navigation
   setCurrentPage: (index: number) => void;
-  setViewingNarration: (index: number) => void;
   // Page CRUD
   addPage: () => void;
   deletePage: (pageId: string) => void;
   reorderPages: (fromIndex: number, toIndex: number) => void;
   updatePageImage: (pageId: string, dataUrl: string | null) => void;
-  updatePageAudio: (pageId: string, dataUrl: string | null) => void;
-  updatePageSettings: (pageId: string, settings: Partial<PageSettings>) => void;
+  updatePageNarrationAudio: (pageId: string, dataUrl: string | null) => void;
+  updatePageNarrationTiming: (pageId: string, timing: "start" | "end") => void;
+  updatePageNarrationRequirement: (pageId: string, value: string) => void;
   // Text blocks
   addTextBlock: (pageId: string) => void;
   removeTextBlock: (pageId: string, blockId: string) => void;
@@ -34,9 +34,9 @@ interface BookStore {
   updateHotspot: (pageId: string, hotspotId: string, patch: Partial<Hotspot>) => void;
   // Selection
   setSelection: (selection: Selection) => void;
-  // Requirements (教研写需求)
+  // Requirements
   updateCoverRequirement: (key: "imageRequirement", value: string) => void;
-  updatePageRequirement: (pageId: string, key: "imageRequirement" | "audioRequirement", value: string) => void;
+  updatePageRequirement: (pageId: string, key: "imageRequirement", value: string) => void;
   updateTextBlockRequirement: (pageId: string, blockId: string, key: "audioRequirement", value: string) => void;
   // Reset
   resetBook: () => void;
@@ -77,12 +77,7 @@ export const useBookStore = create<BookStore>()(
 
       setCurrentPage: (index) =>
         set((s) => ({
-          book: { ...s.book, currentPageIndex: index, viewMode: "canvas", selection: { type: "none" } },
-        })),
-
-      setViewingNarration: (index) =>
-        set((s) => ({
-          book: { ...s.book, currentPageIndex: index, viewMode: "narration", selection: { type: "none" } },
+          book: { ...s.book, currentPageIndex: index, selection: { type: "none" } },
         })),
 
       addPage: () =>
@@ -98,14 +93,13 @@ export const useBookStore = create<BookStore>()(
                   { id: crypto.randomUUID(), content: "", translation: "", audioUrl: null, audioRequirement: "" },
                 ],
                 hotspots: [],
-                audioUrl: null,
-                settings: { backgroundColor: null, fontSize: null, textAlign: null },
+                narrationAudioUrl: null,
+                narrationAudioRequirement: "",
+                narrationTiming: "start" as const,
                 imageRequirement: "",
-                audioRequirement: "",
               },
             ],
             currentPageIndex: s.book.pages.length,
-            viewMode: "canvas",
             selection: { type: "none" },
           },
         })),
@@ -115,7 +109,7 @@ export const useBookStore = create<BookStore>()(
           if (s.book.pages.length <= 1) return s;
           const pages = s.book.pages.filter((p) => p.id !== pageId);
           const currentPageIndex = Math.min(s.book.currentPageIndex, pages.length - 1);
-          return { book: { ...s.book, pages, currentPageIndex, viewMode: "canvas", selection: { type: "none" } } };
+          return { book: { ...s.book, pages, currentPageIndex, selection: { type: "none" } } };
         }),
 
       reorderPages: (fromIndex, toIndex) =>
@@ -129,16 +123,14 @@ export const useBookStore = create<BookStore>()(
       updatePageImage: (pageId, dataUrl) =>
         set((s) => ({ book: updatePage(s.book, pageId, (p) => ({ ...p, imageUrl: dataUrl })) })),
 
-      updatePageAudio: (pageId, dataUrl) =>
-        set((s) => ({ book: updatePage(s.book, pageId, (p) => ({ ...p, audioUrl: dataUrl })) })),
+      updatePageNarrationAudio: (pageId, dataUrl) =>
+        set((s) => ({ book: updatePage(s.book, pageId, (p) => ({ ...p, narrationAudioUrl: dataUrl })) })),
 
-      updatePageSettings: (pageId, settings) =>
-        set((s) => ({
-          book: updatePage(s.book, pageId, (p) => ({
-            ...p,
-            settings: { ...p.settings, ...settings },
-          })),
-        })),
+      updatePageNarrationTiming: (pageId, timing) =>
+        set((s) => ({ book: updatePage(s.book, pageId, (p) => ({ ...p, narrationTiming: timing })) })),
+
+      updatePageNarrationRequirement: (pageId, value) =>
+        set((s) => ({ book: updatePage(s.book, pageId, (p) => ({ ...p, narrationAudioRequirement: value })) })),
 
       // ---- Text blocks ----
       addTextBlock: (pageId) =>
@@ -153,15 +145,17 @@ export const useBookStore = create<BookStore>()(
         })),
 
       removeTextBlock: (pageId, blockId) =>
-        set((s) => ({
-          book: updatePage(s.book, pageId, (p) => ({
+        set((s) => {
+          const newBook = updatePage(s.book, pageId, (p) => ({
             ...p,
             textBlocks: p.textBlocks.filter((b) => b.id !== blockId),
-          })),
-          ...(s.book.selection.textBlockId === blockId
-            ? { book: { ...s.book, selection: { type: "none" } } }
-            : {}),
-        })),
+          }));
+          return {
+            book: s.book.selection.textBlockId === blockId
+              ? { ...newBook, selection: { type: "none" } }
+              : newBook,
+          };
+        }),
 
       updateTextBlock: (pageId, blockId, patch) =>
         set((s) => ({
@@ -242,7 +236,7 @@ export const useBookStore = create<BookStore>()(
     }),
     {
       name: "picture-book-data",
-      version: 5,
+      version: 8,
       migrate: (persistedState: any, version: number) => {
         if (version < 2) {
           const defaultBook = createDefaultBook();
@@ -294,6 +288,49 @@ export const useBookStore = create<BookStore>()(
                 audioRequirement: b.audioRequirement ?? "",
               })),
             }));
+          }
+        }
+        // v7: Page 新增 narrationAudioRequirement 字段
+        if (version < 7) {
+          const book = persistedState?.book;
+          if (book?.pages) {
+            book.pages = book.pages.map((p: any) => ({
+              ...p,
+              narrationAudioRequirement: p.narrationAudioRequirement ?? "",
+            }));
+          }
+        }
+        // v6: 移除双角色/页间语音，改为每页独立讲解语音
+        if (version < 6) {
+          const book = persistedState?.book;
+          if (book) {
+            // 移除 viewMode
+            delete book.viewMode;
+            // Cover 补全 narration 字段
+            if (book.cover) {
+              book.cover.narrationAudioUrl = book.cover.narrationAudioUrl ?? null;
+              book.cover.narrationTiming = book.cover.narrationTiming ?? "start";
+            }
+            // Page 字段迁移
+            if (book.pages) {
+              book.pages = book.pages.map((p: any) => {
+                const { audioUrl, audioRequirement, settings, ...rest } = p;
+                return {
+                  ...rest,
+                  narrationAudioUrl: audioUrl ?? null,
+                  narrationTiming: p.narrationTiming ?? "start",
+                  imageRequirement: p.imageRequirement ?? "",
+                };
+              });
+            }
+          }
+        }
+        // v8: Cover 新增 lexile/isFictional 字段
+        if (version < 8) {
+          const book = persistedState?.book;
+          if (book?.cover) {
+            book.cover.lexile = book.cover.lexile ?? "";
+            book.cover.isFictional = book.cover.isFictional ?? "";
           }
         }
         return persistedState as any;

@@ -26,6 +26,9 @@ export function PageThumbnail({ page, index, isActive, onClick }: PageThumbnailP
     opacity: isDragging ? 0.5 : 1,
   };
 
+  const hasImage = !!page.imageUrl;
+  const hasText = page.textBlocks.some((b) => b.content.trim().length > 0);
+
   return (
     <div
       ref={setNodeRef}
@@ -52,18 +55,20 @@ export function PageThumbnail({ page, index, isActive, onClick }: PageThumbnailP
 
       {/* Thumbnail preview */}
       <div className="relative w-14 h-14 rounded-base overflow-hidden bg-neutral-100 flex-shrink-0 border border-neutral-200">
-        {page.imageUrl ? (
+        {hasImage ? (
           <img
-            src={page.imageUrl}
-            alt={`第 ${index + 1} 页`}
+            src={page.imageUrl!}
+            alt={`正文 ${index + 1}`}
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <Image size={18} className="text-neutral-400" />
+          <div className="w-full h-full flex flex-col items-center justify-center">
+            <Image size={14} className="text-neutral-300 mb-0.5" />
+            <span className="text-[8px] text-neutral-400">暂无图片</span>
           </div>
         )}
-        {page.audioUrl && (
+        {/* Narration indicator */}
+        {page.narrationAudioUrl && (
           <div className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-brand-500 rounded-full flex items-center justify-center">
             <Mic size={8} className="text-white" />
           </div>
@@ -71,12 +76,21 @@ export function PageThumbnail({ page, index, isActive, onClick }: PageThumbnailP
       </div>
 
       {/* Page info */}
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold text-neutral-700">
-          第 {index + 1} 页
+      <div className="flex-1 min-w-0 flex flex-col justify-center">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-semibold text-neutral-700">
+            正文 {index + 1}
+          </span>
+          {/* Warning indicator if no content */}
+          {(!hasImage || !hasText) && (
+            <span className="text-[10px] text-amber-500 font-bold">!!</span>
+          )}
         </div>
-        <div className="text-xs text-neutral-500 mt-0.5 truncate">
-          {page.textBlocks[0]?.content || "暂无文字"}
+        <div className="text-[10px] text-neutral-400 mt-0.5 truncate">
+          {hasText
+            ? (page.textBlocks.find((b) => b.content.trim())?.content || "")
+            : "暂无文案"
+          }
         </div>
       </div>
     </div>

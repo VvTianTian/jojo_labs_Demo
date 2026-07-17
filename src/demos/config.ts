@@ -1,4 +1,4 @@
-import { BookOpen, GitBranch, CheckSquare } from "lucide-react";
+import { BookOpen, GitBranch, CheckSquare, ListChecks } from "lucide-react";
 
 export interface DemoConfig {
   id: string;
@@ -33,5 +33,13 @@ export const demos: DemoConfig[] = [
     path: "/tree-checkbox",
     icon: CheckSquare,
     color: "warning",
+  },
+  {
+    id: "cascader-select",
+    name: "级联多选下拉",
+    description: "支持多层级树形结构的多选级联下拉框，含互斥逻辑",
+    path: "/cascader-select",
+    icon: ListChecks,
+    color: "info",
   },
 ];
