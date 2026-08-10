@@ -4,6 +4,7 @@ import { PictureBookEditor } from "./demos/picture-book-editor";
 import { FlowchartDemo } from "./demos/flowchart";
 import { TreeCheckboxDemo } from "./demos/tree-checkbox";
 import { CascaderSelectDemo } from "./demos/cascader-select";
+import { CoverGenerator } from "./demos/cover-generator";
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
       <Route path="/flowchart/*" element={<FlowchartDemo />} />
       <Route path="/tree-checkbox" element={<TreeCheckboxDemo />} />
       <Route path="/cascader-select" element={<CascaderSelectDemo />} />
+      <Route path="/cover-generator" element={<CoverGenerator />} />
     </Routes>
   );
 }

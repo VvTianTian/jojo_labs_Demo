@@ -1,0 +1,138 @@
+/**
+ * 资源缩略图选择器
+ * 分类切换和网格内部滚动都在组件内完成，素材数量增加时不改变外层布局高度。
+ */
+
+import React, { useState } from 'react';
+import { Check, ImageOff } from 'lucide-react';
+
+export interface ThumbnailItem {
+  id: string;
+  name: string;
+  path: string;
+}
+
+export interface ThumbnailCategory {
+  id: string;
+  name: string;
+  items: ThumbnailItem[];
+}
+
+interface ThumbnailGridProps {
+  categories: ThumbnailCategory[];
+  value: string;
+  onChange: (id: string) => void;
+  allowNone?: boolean;
+  noneLabel?: string;
+  thumbSize?: number;
+  columns?: number;
+  maxHeight?: number;
+}
+
+export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
+  categories,
+  value,
+  onChange,
+  allowNone = false,
+  noneLabel = '无',
+  thumbSize = 64,
+  maxHeight = 220,
+}) => {
+  const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? '');
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+
+  const currentCategory = categories.find((category) => category.id === activeCategory) ?? categories[0];
+
+  const markImageFailed = (path: string) => {
+    setFailedImages((current) => {
+      if (current.has(path)) return current;
+      const next = new Set(current);
+      next.add(path);
+      return next;
+    });
+  };
+
+  return (
+    <div className="cover-thumbnail-picker">
+      {categories.length > 1 && (
+        <div className="cover-thumbnail-tabs" role="tablist" aria-label="素材分类">
+          {categories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              role="tab"
+              aria-selected={currentCategory?.id === category.id}
+              className={`cover-thumbnail-tab${currentCategory?.id === category.id ? ' is-selected' : ''}`}
+              onClick={() => setActiveCategory(category.id)}
+            >
+              {category.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="cover-thumbnail-grid"
+        role="listbox"
+        aria-label="可选素材"
+        style={{
+          maxHeight,
+          gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(48, thumbSize)}px, 1fr))`,
+        }}
+      >
+        {allowNone && (
+          <button
+            type="button"
+            className={`cover-thumbnail-button cover-thumbnail-button--none${value === '' ? ' is-selected' : ''}`}
+            role="option"
+            aria-selected={value === ''}
+            aria-label={noneLabel}
+            title={noneLabel}
+            onClick={() => onChange('')}
+          >
+            <span>{noneLabel}</span>
+          </button>
+        )}
+
+        {currentCategory?.items.map((item) => {
+          const selected = value === item.id;
+          const failed = failedImages.has(item.path);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`cover-thumbnail-button${selected ? ' is-selected' : ''}`}
+              role="option"
+              aria-selected={selected}
+              aria-label={item.name}
+              title={item.name}
+              onClick={() => onChange(item.id)}
+            >
+              {failed ? (
+                <span className="cover-thumbnail-button__fallback">
+                  <ImageOff size={15} aria-hidden="true" />
+                  <span>加载失败</span>
+                </span>
+              ) : (
+                <img
+                  src={item.path}
+                  alt=""
+                  draggable={false}
+                  loading="lazy"
+                  onError={() => markImageFailed(item.path)}
+                />
+              )}
+              {selected && (
+                <span className="cover-thumbnail-button__check" aria-hidden="true">
+                  <Check size={11} strokeWidth={2.5} />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default ThumbnailGrid;

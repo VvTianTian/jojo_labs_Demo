@@ -1,4 +1,4 @@
-import { BookOpen, GitBranch, CheckSquare, ListChecks } from "lucide-react";
+import { BookOpen, GitBranch, CheckSquare, ListChecks, Image } from "lucide-react";
 
 export interface DemoConfig {
   id: string;
@@ -41,5 +41,13 @@ export const demos: DemoConfig[] = [
     path: "/cascader-select",
     icon: ListChecks,
     color: "info",
+  },
+  {
+    id: "cover-generator",
+    name: "封面图生成工具",
+    description: "在线生成项目/项目组封面图，支持多种布局、背景色、纹理和人物素材",
+    path: "/cover-generator",
+    icon: Image,
+    color: "brand",
   },
 ];
