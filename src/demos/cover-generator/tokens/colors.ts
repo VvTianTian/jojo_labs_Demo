@@ -13,6 +13,8 @@ export interface CoverColorScale {
   6: string;
 }
 
+export type CoverColorLevel = keyof CoverColorScale;
+
 export type CoverColorName =
   | 'yellow'
   | 'orange'
@@ -69,6 +71,135 @@ export const coverColors: Record<CoverColorName, CoverColorScale> = {
 /** 获取所有色系名称列表 */
 export const coverColorNames = Object.keys(coverColors) as CoverColorName[];
 
+export type CoverColorId = string;
+
+export interface CoverColorOption {
+  id: CoverColorId;
+  family: CoverColorName;
+  familyLabel: string;
+  step: CoverColorLevel;
+  hex: string;
+  /** 完全相同的色值在其他色系中的别名，不重复渲染为选择入口。 */
+  aliases: string[];
+}
+
+const COLOR_LEVELS: CoverColorLevel[] = [1, 2, 3, 4, 5, 6];
+
+/**
+ * 将 15×6 色板展开为具体颜色，并按十六进制值合并完全重复项。
+ * 近似但不同的颜色保留，避免误删主题语义。
+ */
+function buildCoverColorOptions(): CoverColorOption[] {
+  const byHex = new Map<string, CoverColorOption>();
+
+  coverColorNames.forEach((family) => {
+    COLOR_LEVELS.forEach((step) => {
+      const hex = coverColors[family][step].toUpperCase();
+      const sourceLabel = `${coverColorLabels[family]} ${step}`;
+      const existing = byHex.get(hex);
+
+      if (existing) {
+        existing.aliases.push(sourceLabel);
+        return;
+      }
+
+      byHex.set(hex, {
+        id: `${family}-${step}`,
+        family,
+        familyLabel: coverColorLabels[family],
+        step,
+        hex,
+        aliases: [],
+      });
+    });
+  });
+
+  return [...byHex.values()];
+}
+
+export const coverColorOptions = buildCoverColorOptions();
+
+export const coverColorOptionsByFamily: Record<CoverColorName, CoverColorOption[]> =
+  coverColorNames.reduce((result, family) => {
+    result[family] = coverColorOptions.filter((option) => option.family === family);
+    return result;
+  }, {} as Record<CoverColorName, CoverColorOption[]>);
+
+const coverColorOptionsById = new Map(
+  coverColorOptions.map((option) => [option.id, option]),
+);
+
+export function getCoverColorOption(id: CoverColorId): CoverColorOption {
+  return coverColorOptionsById.get(id) ?? coverColorOptions[0];
+}
+
+export function getCoverColorHex(id: CoverColorId): string {
+  return getCoverColorOption(id).hex;
+}
+
+export interface TextColorOption {
+  id: string;
+  label: string;
+  hex: string;
+  source?: string;
+}
+
+const WHITE_TEXT: TextColorOption = { id: 'white', label: '白色', hex: '#FFFFFF' };
+const INK_TEXT: TextColorOption = { id: 'ink', label: '深灰', hex: '#353E42', source: '基础色' };
+
+function channelToLinear(channel: number): number {
+  const value = channel / 255;
+  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(hex: string): number {
+  const normalized = hex.replace('#', '');
+  const red = channelToLinear(Number.parseInt(normalized.slice(0, 2), 16));
+  const green = channelToLinear(Number.parseInt(normalized.slice(2, 4), 16));
+  const blue = channelToLinear(Number.parseInt(normalized.slice(4, 6), 16));
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+export function contrastRatio(first: string, second: string): number {
+  const firstLuminance = luminance(first);
+  const secondLuminance = luminance(second);
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** 返回与当前背景有足够对比度的文字颜色建议。 */
+export function getTextColorOptions(backgroundColorId: CoverColorId): TextColorOption[] {
+  const background = getCoverColorHex(backgroundColorId);
+  const darkPaletteOptions = coverColorNames.map((family) => {
+    const hex = coverColors[family][6].toUpperCase();
+    return {
+      id: `text-${family}`,
+      label: `${coverColorLabels[family]}深色`,
+      hex,
+      source: `色板 ${coverColorLabels[family]} 6`,
+    } satisfies TextColorOption;
+  });
+
+  const seen = new Set<string>();
+  const candidates = [WHITE_TEXT, INK_TEXT, ...darkPaletteOptions].filter((option) => {
+    if (seen.has(option.hex)) return false;
+    seen.add(option.hex);
+    return contrastRatio(background, option.hex) >= 3;
+  });
+
+  return candidates.length > 0 ? candidates : [INK_TEXT];
+}
+
+export function getTextColorHex(
+  backgroundColorId: CoverColorId,
+  textColorId: string,
+): string {
+  const match = getTextColorOptions(backgroundColorId).find((option) => option.id === textColorId);
+  return match?.hex ?? getTextColorOptions(backgroundColorId)[0].hex;
+}
+
+/** 获取所有色系名称列表 */
 /** 获取指定色系的背景色（默认使用第1阶） */
 export function getCoverBgColor(name: CoverColorName): string {
   return coverColors[name][1];

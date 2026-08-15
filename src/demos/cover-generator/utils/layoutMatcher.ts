@@ -1,21 +1,40 @@
 /**
  * 布局自动匹配工具
- * 根据字数、布局方向和英语标识选择 12 套布局之一
+ * 根据字数、布局方向和特殊标题标识选择项目组布局。
  */
 
 import { groupLayouts, projectLayout, type CoverLayout } from '../tokens/layouts';
 
 export type LayoutDirection = 'left-image' | 'right-image';
 
-/** 判断项目组标题是否为英语类型（如 L1、L2、新L1） */
+export interface SpecialGroupTitle {
+  prefix: string;
+  level: string;
+  normalized: string;
+}
+
+const SPECIAL_GROUP_TITLE_PATTERN = /^(新)?([A-Za-z])([0-9])$/;
+
+/**
+ * 解析项目组特殊标题：一个 ASCII 字母 + 一个数字，可选“新”前缀。
+ * 首尾空格由 trim 忽略，内部空格和多位数字不会匹配。
+ */
+export function parseSpecialGroupTitle(title: string): SpecialGroupTitle | null {
+  const match = title.trim().match(SPECIAL_GROUP_TITLE_PATTERN);
+  if (!match) return null;
+
+  const prefix = match[1] ?? '';
+  const level = `${match[2].toUpperCase()}${match[3]}`;
+  return {
+    prefix,
+    level,
+    normalized: `${prefix}${level}`,
+  };
+}
+
+/** 判断项目组标题是否为特殊布局标题（如 L1、A2、新L1） */
 export function isEnglishTitle(title: string): boolean {
-  const trimmed = title.trim();
-  if (trimmed.length === 0) return false;
-  // 纯 L + 数字
-  if (/^L\d+$/i.test(trimmed)) return true;
-  // 中文前缀（最多1字） + 可选空格 + L + 数字，如「新L1」「新 L2」
-  if (/^[\u4e00-\u9fff][ ]?L\d+$/i.test(trimmed)) return true;
-  return false;
+  return parseSpecialGroupTitle(title) !== null;
 }
 
 /** 获取有效字数（英语标题返回 2，其他返回非空字符数） */

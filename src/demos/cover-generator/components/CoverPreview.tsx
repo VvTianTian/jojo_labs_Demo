@@ -1,28 +1,29 @@
 /**
- * 封面预览组件
- * 使用 Canvas 2D API 实时渲染封面
- * 渲染层级：背景色 → 背景纹理 → 存储标签 → 封面文字 → 头图人物
+ * 封面 Canvas 预览与导出绘制源。
+ * 渲染层级：背景色 → 背景纹理 → 特殊装饰 → 存储标签 → 标题 → 人物。
  */
 
-/* 该文件同时导出 Canvas 绘制和图片加载工具，供导出模块复用。 */
 /* eslint-disable react-refresh/only-export-components */
 
-import { useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { CANVAS_SIZE, type CoverLayout } from '../tokens/layouts';
-import { coverColors, type CoverColorName } from '../tokens/colors';
-import { textures, projectFigureCategories, groupFigureCategories, FONT_FAMILIES } from '../tokens/assets';
-import { resolveLayout, isEnglishTitle } from '../utils/layoutMatcher';
-import type { LayoutDirection } from '../utils/layoutMatcher';
+import {
+  coverColors,
+  getCoverColorHex,
+  getCoverColorOption,
+  getTextColorHex,
+} from '../tokens/colors';
+import {
+  textures,
+  projectFigureCategories,
+  groupFigureCategories,
+  FONT_FAMILIES,
+} from '../tokens/assets';
+import { parseSpecialGroupTitle, resolveLayout, isEnglishTitle } from '../utils/layoutMatcher';
+import type { CoverDraft } from '../types';
 
-export interface CoverPreviewState {
-  coverType: 'project' | 'group';
-  title: string;
-  direction: LayoutDirection;
-  showStorageTag: boolean;
-  color: CoverColorName;
-  textureId: string;
-  figureId: string;
-}
+export type CoverPreviewState = CoverDraft;
+export type CoverAssetsStatus = 'loading' | 'ready' | 'error';
 
 export interface CoverPreviewHandle {
   getCanvas: () => HTMLCanvasElement | null;
@@ -31,129 +32,143 @@ export interface CoverPreviewHandle {
 
 interface CoverPreviewProps {
   state: CoverPreviewState;
+  retryToken?: number;
+  onAssetsStatus?: (status: CoverAssetsStatus, failedPaths?: string[]) => void;
 }
 
-/** 在 Canvas 上绘制封面（支持 scale 高清渲染） */
+/** 在 Canvas 上绘制封面，scale 仅供内部导出使用。 */
 export function drawCover(
   ctx: CanvasRenderingContext2D,
   state: CoverPreviewState,
   images: Map<string, HTMLImageElement>,
-  scale: number = 1,
+  scale = 1,
 ) {
-  const { coverType, title, direction, showStorageTag, color, textureId, figureId } = state;
+  const {
+    coverType,
+    title,
+    direction,
+    showStorageTag,
+    backgroundColorId,
+    textColorId,
+    textureId,
+    figureId,
+  } = state;
 
   const canvasSize = coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
   const W = canvasSize.width;
   const H = canvasSize.height;
-
-  // 获取布局
   const layout: CoverLayout = resolveLayout(coverType, title, direction);
 
   ctx.save();
   ctx.scale(scale, scale);
 
-  // 1. 背景色
-  const bgLevel = coverType === 'project' ? 4 : 1;
-  const bgColor = coverColors[color][bgLevel];
-  ctx.fillStyle = bgColor;
+  // 1. 背景色：直接使用用户选择的具体色阶。
+  ctx.fillStyle = getCoverColorHex(backgroundColorId);
   ctx.fillRect(0, 0, W, H);
 
-  // 2. 背景纹理（叠加）
+  // 2. 背景纹理。
   if (textureId) {
-    const texture = textures.find((t) => t.id === textureId);
-    if (texture) {
-      const texImg = images.get(texture.path);
-      if (texImg && texImg.complete && texImg.naturalWidth > 0) {
-        ctx.save();
-        if (coverType === 'project') {
-          ctx.globalCompositeOperation = 'overlay';
-          ctx.globalAlpha = 0.8;
-          // 项目封面纹理：居中等比缩放（contain）
-          const texScale = Math.min(W / texImg.naturalWidth, H / texImg.naturalHeight);
-          const texW = texImg.naturalWidth * texScale;
-          const texH = texImg.naturalHeight * texScale;
-          const texX = (W - texW) / 2;
-          const texY = (H - texH) / 2;
-          ctx.drawImage(texImg, texX, texY, texW, texH);
-        } else {
-          ctx.globalAlpha = 0.35;
-          ctx.drawImage(texImg, 0, 0, W, H);
-        }
-        ctx.restore();
+    const texture = textures.find((item) => item.id === textureId);
+    const textureImage = texture ? images.get(texture.path) : undefined;
+    if (textureImage && textureImage.complete && textureImage.naturalWidth > 0) {
+      ctx.save();
+      if (coverType === 'project') {
+        ctx.globalCompositeOperation = 'overlay';
+        ctx.globalAlpha = 0.72;
+        // Project textures use a centered, aspect-ratio-preserving cover crop so
+        // the texture reaches every edge of the 640×360 export canvas.
+        const textureScale = Math.max(W / textureImage.naturalWidth, H / textureImage.naturalHeight);
+        const textureWidth = textureImage.naturalWidth * textureScale;
+        const textureHeight = textureImage.naturalHeight * textureScale;
+        ctx.drawImage(
+          textureImage,
+          (W - textureWidth) / 2,
+          (H - textureHeight) / 2,
+          textureWidth,
+          textureHeight,
+        );
+      } else {
+        ctx.globalAlpha = 0.35;
+        ctx.drawImage(textureImage, 0, 0, W, H);
       }
+      ctx.restore();
     }
   }
 
-  // 英语组件的装饰图形属于布局本身，不依赖人物素材。
+  // 英语模板的浅色装饰由模板自带，不依赖人物素材。
   if (coverType === 'group' && isEnglishTitle(title)) {
-    drawEnglishDecoration(ctx, color, W);
+    drawEnglishDecoration(ctx, backgroundColorId);
   }
 
-  // 3. 存储标签（仅项目组，左上角）
+  // 3. 存储标签。
   if (coverType === 'group' && showStorageTag) {
     drawStorageTag(ctx);
   }
 
-  // 4. 封面文字
-  drawTitle(ctx, state, layout);
+  // 4. 标题。
+  drawTitle(ctx, state, layout, textColorId);
 
-  // 5. 头图人物
+  // 5. 人物。
   if (figureId && layout.figure && !(coverType === 'group' && isEnglishTitle(title))) {
-    const figPath = findFigurePath(coverType, figureId);
-    if (figPath) {
-      const figImg = images.get(figPath);
-      if (figImg && figImg.complete && figImg.naturalWidth > 0) {
-        const fl = layout.figure;
-        // 底部对齐：y 是底部坐标
-        ctx.drawImage(figImg, fl.x, fl.y - fl.height, fl.width, fl.height);
-      }
+    const figurePath = findFigurePath(coverType, figureId);
+    const figureImage = figurePath ? images.get(figurePath) : undefined;
+    if (figureImage && figureImage.complete && figureImage.naturalWidth > 0) {
+      const figureLayout = layout.figure;
+      ctx.drawImage(
+        figureImage,
+        figureLayout.x,
+        figureLayout.y - figureLayout.height,
+        figureLayout.width,
+        figureLayout.height,
+      );
     }
   }
 
   ctx.restore();
 }
 
-/** 绘制存储标签 */
 function drawStorageTag(ctx: CanvasRenderingContext2D) {
-  // Figma 组件：x=26、y=26、116×57，圆角 20；文字内边距 24/6。
   const tagX = 26;
   const tagY = 26;
   const tagW = 116;
   const tagH = 57;
 
   ctx.save();
-  // 标签背景
   ctx.fillStyle = '#353E42';
   ctx.beginPath();
   ctx.roundRect(tagX, tagY, tagW, tagH, 20);
   ctx.fill();
 
-  // 标签文字
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = '#FFFFFF';
   ctx.font = '500 34px "PingFang SC", "Microsoft YaHei", sans-serif';
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('存储', tagX + 24, tagY + 6);
+  const label = '存储';
+  const metrics = ctx.measureText(label);
+  const ascent = metrics.actualBoundingBoxAscent ?? 0;
+  const descent = metrics.actualBoundingBoxDescent ?? 0;
+
+  if (ascent + descent > 0) {
+    // Figma uses a 45px line box centered inside the 57px tag. Canvas has no
+    // line-height, so center the measured glyph bounds to match that result.
+    ctx.textBaseline = 'alphabetic';
+    const baselineY = tagY + tagH / 2 + (ascent - descent) / 2;
+    ctx.fillText(label, tagX + 24, baselineY);
+  } else {
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, tagX + 24, tagY + tagH / 2);
+  }
   ctx.restore();
 }
 
-/** 英语组件中的浅色装饰背景（Figma 中为布局自带图形，不是人物素材）。 */
 function drawEnglishDecoration(
   ctx: CanvasRenderingContext2D,
-  color: CoverColorName,
-  width: number,
+  backgroundColorId: string,
 ) {
-  ctx.save();
-  ctx.globalAlpha = 0.1;
-  ctx.fillStyle = coverColors[color][3];
-  ctx.font = `700 200px "${FONT_FAMILIES.groupTitle}", "PingFang SC", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillText('ABCDEFGHIJKLMNOPQRSTUVWXYZ', width / 2, 52);
-  ctx.fillText('ABCDEFGHIJKLMNOPQRSTUVWXYZ', width / 2, 252);
+  const family = getCoverColorOption(backgroundColorId).family;
 
-  // 用圆角块补足 Figma 英语组件中的抽象图形层，保持低对比度，避免压住标题。
+  ctx.save();
   ctx.globalAlpha = 0.08;
+  ctx.fillStyle = coverColors[family][3];
   const blobs = [
     { x: 50, y: 38, w: 160, h: 78, r: 36 },
     { x: 460, y: 76, w: 170, h: 86, r: 40 },
@@ -168,113 +183,89 @@ function drawEnglishDecoration(
   ctx.restore();
 }
 
-/** 绘制标题 */
 function drawTitle(
   ctx: CanvasRenderingContext2D,
   state: CoverPreviewState,
   layout: CoverLayout,
+  textColorId: string,
 ) {
-  const { coverType, title } = state;
+  const { coverType, title, backgroundColorId } = state;
   if (!title) return;
 
-  const tl = layout.text;
   const isEnglish = coverType === 'group' && isEnglishTitle(title);
-
-  if (coverType === 'group' && isEnglish) {
-    drawEnglishTitle(ctx, title);
+  if (isEnglish) {
+    drawEnglishTitle(ctx, title, getTextColorHex(backgroundColorId, textColorId));
     return;
   }
 
-  // 选择字体
-  let fontFamily: string;
-  if (isEnglish) {
-    fontFamily = FONT_FAMILIES.englishTitle;
-  } else if (coverType === 'project') {
-    fontFamily = FONT_FAMILIES.projectTitle;
-  } else {
-    fontFamily = FONT_FAMILIES.groupTitle;
-  }
+  const textLayout = layout.text;
+  const fontFamily = coverType === 'project'
+    ? FONT_FAMILIES.projectTitle
+    : FONT_FAMILIES.groupTitle;
 
   ctx.save();
+  ctx.fillStyle = getTextColorHex(backgroundColorId, textColorId);
+  ctx.font = `${coverType === 'project' ? 'normal' : '700'} ${textLayout.fontSize}px "${fontFamily}", "PingFang SC", sans-serif`;
+  ctx.textAlign = textLayout.align;
+  ctx.textBaseline = textLayout.vAlign === 'middle' ? 'middle' : 'top';
 
-  // 2c: 项目封面文字固定白色
-  ctx.fillStyle = coverType === 'project' ? '#FFFFFF' : getTextColor(state.color);
-
-  // 2g: 项目封面 font-weight 为 normal
-  const weight = coverType === 'project' ? 'normal' : '700';
-  ctx.font = `${weight} ${tl.fontSize}px "${fontFamily}", "PingFang SC", sans-serif`;
-  ctx.textAlign = tl.align;
-  ctx.textBaseline = tl.vAlign === 'middle' ? 'middle' : 'top';
-
-  // 2d: 项目封面文字阴影
-  if (coverType === 'project' && tl.shadow) {
-    ctx.shadowOffsetX = tl.shadow.offsetX;
-    ctx.shadowOffsetY = tl.shadow.offsetY;
-    ctx.shadowBlur = tl.shadow.blur;
-    ctx.shadowColor = tl.shadow.color;
+  if (coverType === 'project' && textLayout.shadow) {
+    ctx.shadowOffsetX = textLayout.shadow.offsetX;
+    ctx.shadowOffsetY = textLayout.shadow.offsetY;
+    ctx.shadowBlur = textLayout.shadow.blur;
+    ctx.shadowColor = textLayout.shadow.color;
   }
 
-  // 不接受手动换行；布局只根据标题宽度自动换行。
   const normalizedTitle = title.replace(/[\r\n]/g, '');
-  const lines = wrapText(ctx, normalizedTitle, tl.maxWidth, tl.letterSpacing ?? 0);
-  const startY = tl.vAlign === 'middle'
-    ? tl.y - ((lines.length - 1) * tl.lineHeight) / 2
-    : tl.y;
+  const lines = wrapText(ctx, normalizedTitle, textLayout.maxWidth, textLayout.letterSpacing ?? 0);
+  const startY = textLayout.vAlign === 'middle'
+    ? textLayout.y - ((lines.length - 1) * textLayout.lineHeight) / 2
+    : textLayout.y;
 
-  // Figma letter-spacing 通过逐字符绘制还原。
-  if (tl.letterSpacing && tl.letterSpacing > 0) {
-    const ls = tl.letterSpacing;
+  if (textLayout.letterSpacing && textLayout.letterSpacing > 0) {
+    const letterSpacing = textLayout.letterSpacing;
     ctx.textAlign = 'left';
-    lines.forEach((line, i) => {
-      const lineY = startY + i * tl.lineHeight;
-      // 计算每个字符宽度
-      const charWidths = [...line].map((ch) => ctx.measureText(ch).width);
-      const totalWidth = charWidths.reduce((s, w) => s + w, 0) + (line.length - 1) * ls;
+    lines.forEach((line, index) => {
+      const lineY = startY + index * textLayout.lineHeight;
+      const charWidths = [...line].map((character) => ctx.measureText(character).width);
+      const totalWidth = charWidths.reduce((sum, width) => sum + width, 0)
+        + (line.length - 1) * letterSpacing;
+      const startX = textLayout.align === 'center'
+        ? textLayout.x - totalWidth / 2
+        : textLayout.align === 'right'
+          ? textLayout.x - totalWidth
+          : textLayout.x;
 
-      let startX: number;
-      if (tl.align === 'center') {
-        startX = tl.x - totalWidth / 2;
-      } else if (tl.align === 'right') {
-        startX = tl.x - totalWidth;
-      } else {
-        startX = tl.x;
-      }
-
-      let curX = startX;
-      for (let ci = 0; ci < line.length; ci++) {
-        ctx.fillText(line[ci], curX, lineY);
-        curX += charWidths[ci] + ls;
+      let currentX = startX;
+      for (let characterIndex = 0; characterIndex < line.length; characterIndex += 1) {
+        ctx.fillText(line[characterIndex], currentX, lineY);
+        currentX += charWidths[characterIndex] + letterSpacing;
       }
     });
-    ctx.textAlign = tl.align;
   } else {
-    lines.forEach((line, i) => {
-      ctx.fillText(line, tl.x, startY + i * tl.lineHeight, tl.maxWidth);
+    lines.forEach((line, index) => {
+      ctx.fillText(line, textLayout.x, startY + index * textLayout.lineHeight, textLayout.maxWidth);
     });
   }
 
-  // 清除 shadow，避免影响后续图层
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
   ctx.shadowBlur = 0;
   ctx.shadowColor = '';
-
   ctx.restore();
 }
 
-/** 绘制英语专属标题：可选 1 个中文前缀 + L1/L2。 */
-function drawEnglishTitle(ctx: CanvasRenderingContext2D, title: string) {
-  const match = title.trim().match(/^([\u4e00-\u9fff])?\s*(L\d+)$/i);
-  if (!match) return;
+function drawEnglishTitle(ctx: CanvasRenderingContext2D, title: string, textColor: string) {
+  const parsedTitle = parseSpecialGroupTitle(title);
+  if (!parsedTitle) return;
 
-  const prefix = match[1] ?? '';
-  const level = match[2].toUpperCase();
+  const { prefix, level } = parsedTitle;
   const centerX = 675 / 2;
   const centerY = 215;
   const gap = prefix ? 12 : 0;
 
   ctx.save();
-  ctx.fillStyle = '#FFFFFF';
+  ctx.fillStyle = textColor;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
 
@@ -295,12 +286,6 @@ function drawEnglishTitle(ctx: CanvasRenderingContext2D, title: string) {
   ctx.restore();
 }
 
-/** 获取文字颜色 */
-function getTextColor(color: CoverColorName): string {
-  return coverColors[color][6];
-}
-
-/** 文本自动换行 */
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -310,19 +295,17 @@ function wrapText(
   const lines: string[] = [];
   let currentLine = '';
 
-  for (const char of text) {
-    const testLine = currentLine + char;
-    const metrics = measureLineWidth(ctx, testLine, letterSpacing);
-    if (metrics > maxWidth && currentLine.length > 0) {
+  for (const character of text) {
+    const testLine = currentLine + character;
+    if (measureLineWidth(ctx, testLine, letterSpacing) > maxWidth && currentLine.length > 0) {
       lines.push(currentLine);
-      currentLine = char;
+      currentLine = character;
     } else {
       currentLine = testLine;
     }
   }
-  if (currentLine) {
-    lines.push(currentLine);
-  }
+
+  if (currentLine) lines.push(currentLine);
   return lines;
 }
 
@@ -332,51 +315,48 @@ function measureLineWidth(
   letterSpacing: number,
 ): number {
   if (!letterSpacing || line.length < 2) return ctx.measureText(line).width;
-  return [...line].reduce((total, char) => total + ctx.measureText(char).width, 0)
+  return [...line].reduce((total, character) => total + ctx.measureText(character).width, 0)
     + (line.length - 1) * letterSpacing;
 }
 
-/** 查找人物素材路径 */
 function findFigurePath(coverType: 'project' | 'group', figureId: string): string | null {
   const categories = coverType === 'project' ? projectFigureCategories : groupFigureCategories;
-  for (const cat of categories) {
-    const fig = cat.figures.find((f) => f.id === figureId);
-    if (fig) return fig.path;
+  for (const category of categories) {
+    const figure = category.figures.find((item) => item.id === figureId);
+    if (figure) return figure.path;
   }
   return null;
 }
 
-/** 收集所有需要加载的图片路径 */
 export function collectImagePaths(state: CoverPreviewState): string[] {
   const paths: string[] = [];
   const { textureId, figureId, coverType, title } = state;
 
   if (textureId) {
-    const tex = textures.find((t) => t.id === textureId);
-    if (tex) paths.push(tex.path);
+    const texture = textures.find((item) => item.id === textureId);
+    if (texture) paths.push(texture.path);
   }
 
   if (figureId && !(coverType === 'group' && isEnglishTitle(title))) {
-    const figPath = findFigurePath(coverType, figureId);
-    if (figPath) paths.push(figPath);
+    const figurePath = findFigurePath(coverType, figureId);
+    if (figurePath) paths.push(figurePath);
   }
 
-  return paths;
+  return [...new Set(paths)];
 }
 
-/** 加载单张图片 */
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`素材加载失败: ${src}`));
+    image.src = src;
   });
 }
 
 export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
-  ({ state }, ref) => {
+  ({ state, retryToken = 0, onAssetsStatus }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const imagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
@@ -392,41 +372,37 @@ export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const canvasSize =
-          state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
+        const canvasSize = state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
         canvas.width = canvasSize.width;
         canvas.height = canvasSize.height;
+        const context = canvas.getContext('2d');
+        if (!context) return;
 
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+        onAssetsStatus?.('loading');
+        const failedPaths: string[] = [];
+        await Promise.all(collectImagePaths(state).map(async (path) => {
+          if (imagesRef.current.has(path)) return;
+          try {
+            imagesRef.current.set(path, await loadImage(path));
+          } catch {
+            failedPaths.push(path);
+          }
+        }));
 
-        // 加载所需图片
-        const paths = collectImagePaths(state);
-        const loadPromises = paths
-          .filter((p) => !imagesRef.current.has(p))
-          .map(async (p) => {
-            try {
-              const img = await loadImage(p);
-              imagesRef.current.set(p, img);
-            } catch {
-              // 图片加载失败，忽略
-            }
-          });
-
-        await Promise.all(loadPromises);
         if (cancelled) return;
 
-        // 清空并重绘
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        drawCover(ctx, state, imagesRef.current);
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        drawCover(context, state, imagesRef.current);
+        onAssetsStatus?.(failedPaths.length > 0 ? 'error' : 'ready', failedPaths);
       };
 
-      render();
-      return () => { cancelled = true; };
-    }, [state]);
+      void render();
+      return () => {
+        cancelled = true;
+      };
+    }, [onAssetsStatus, retryToken, state]);
 
-    const canvasSize =
-      state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
+    const canvasSize = state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
 
     return (
       <div className="cover-preview-stage">

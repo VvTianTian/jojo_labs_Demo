@@ -1,8 +1,4 @@
-/**
- * 封面导出工具
- * 统一使用 JPG，支持 1x/2x 高清导出
- * 2x 导出以 2x 分辨率重新渲染整个封面（而非拉伸 1x 像素）
- */
+/** 封面目标尺寸导出工具。 */
 
 import { CANVAS_SIZE } from '../tokens/layouts';
 import {
@@ -11,21 +7,17 @@ import {
   loadImage,
   type CoverPreviewState,
 } from '../components/CoverPreview';
+import type { ExportScale } from '../types';
 
 interface ExportOptions {
-  /** 封面状态 */
   state: CoverPreviewState;
-  /** 已加载的图片资源 */
   images: Map<string, HTMLImageElement>;
-  /** 倍率：1x 或 2x */
-  scale: 1 | 2;
-  /** 文件名（不含扩展名） */
+  scale: ExportScale;
   filename: string;
-  /** JPG 质量，默认 0.92 */
   quality?: number;
 }
 
-/** 导出封面图片到本地 */
+/** 以封面原始尺寸重新绘制并下载，避免下载预览缩放后的像素。 */
 export async function exportCoverImage({
   state,
   images,
@@ -33,48 +25,31 @@ export async function exportCoverImage({
   filename,
   quality = 0.92,
 }: ExportOptions): Promise<void> {
-  // 确保所有图片已加载（兜底）
   const paths = collectImagePaths(state);
-  const loadPromises = paths
-    .filter((p) => !images.has(p))
-    .map(async (p) => {
-      try {
-        const img = await loadImage(p);
-        images.set(p, img);
-      } catch {
-        // 图片加载失败，忽略（使用系统字体兜底等）
-      }
-    });
-  await Promise.all(loadPromises);
+  await Promise.all(paths.map(async (path) => {
+    if (images.has(path)) return;
+    images.set(path, await loadImage(path));
+  }));
 
-  // 创建导出画布（物理像素 = 原始尺寸 × scale）
-  const canvasSize =
-    state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
+  const canvasSize = state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
   const exportCanvas = document.createElement('canvas');
   exportCanvas.width = canvasSize.width * scale;
   exportCanvas.height = canvasSize.height * scale;
 
-  const ctx = exportCanvas.getContext('2d');
-  if (!ctx) return;
+  const context = exportCanvas.getContext('2d');
+  if (!context) throw new Error('当前浏览器无法创建导出画布');
 
-  // 以对应 scale 重新绘制整个封面（文字、图形均以矢量方式渲染，保证高清）
-  drawCover(ctx, state, images, scale);
+  drawCover(context, state, images, scale);
 
   const dataUrl = exportCanvas.toDataURL('image/jpeg', quality);
-
-  const scaleLabel = scale === 2 ? '@2x' : '';
-  const fullFilename = `${filename}${scaleLabel}.jpg`;
-
-  // 创建下载链接
   const link = document.createElement('a');
   link.href = dataUrl;
-  link.download = fullFilename;
+  link.download = `${filename}${scale === 2 ? '@2x' : ''}.jpg`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
 }
 
-/** 生成导出文件名 */
 export function buildExportFilename(
   title: string,
   coverType: 'project' | 'group',

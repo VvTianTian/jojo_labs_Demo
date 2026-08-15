@@ -3,7 +3,7 @@
  * 分类切换和网格内部滚动都在组件内完成，素材数量增加时不改变外层布局高度。
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, ImageOff } from 'lucide-react';
 
 export interface ThumbnailItem {
@@ -40,8 +40,71 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 }) => {
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? '');
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  const isWrappingTabsRef = useRef(false);
 
-  const currentCategory = categories.find((category) => category.id === activeCategory) ?? categories[0];
+  const resolvedActiveCategory = categories.some((category) => category.id === activeCategory)
+    ? activeCategory
+    : categories[0]?.id ?? '';
+  const currentCategory = categories.find((category) => category.id === resolvedActiveCategory) ?? categories[0];
+
+  useEffect(() => {
+    if (tabsRef.current) {
+      isWrappingTabsRef.current = true;
+      tabsRef.current.scrollLeft = 0;
+      window.requestAnimationFrame(() => {
+        isWrappingTabsRef.current = false;
+      });
+    }
+  }, [categories]);
+
+  const wrapTabsScroll = useCallback((tabs: HTMLDivElement) => {
+    if (isWrappingTabsRef.current) return;
+
+    const maxScrollLeft = tabs.scrollWidth - tabs.clientWidth;
+    if (maxScrollLeft <= 1) return;
+
+    if (tabs.scrollLeft <= 0) {
+      isWrappingTabsRef.current = true;
+      tabs.scrollLeft = maxScrollLeft - 1;
+    } else if (tabs.scrollLeft >= maxScrollLeft - 1) {
+      isWrappingTabsRef.current = true;
+      tabs.scrollLeft = 1;
+    }
+
+    if (isWrappingTabsRef.current) {
+      window.requestAnimationFrame(() => {
+        isWrappingTabsRef.current = false;
+      });
+    }
+  }, []);
+
+  const handleTabsWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const tabs = event.currentTarget;
+    const maxScrollLeft = tabs.scrollWidth - tabs.clientWidth;
+    if (maxScrollLeft <= 1) return;
+
+    const delta = Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+      ? event.deltaX
+      : event.deltaY;
+    if (delta === 0) return;
+
+    const isMovingRight = delta > 0;
+    const isAtStart = tabs.scrollLeft <= 0;
+    const isAtEnd = tabs.scrollLeft >= maxScrollLeft - 1;
+
+    if ((isMovingRight && isAtEnd) || (!isMovingRight && isAtStart)) {
+      event.preventDefault();
+      tabs.scrollLeft = isMovingRight ? 1 : maxScrollLeft - 1;
+      return;
+    }
+
+    // 普通鼠标滚轮只有 deltaY，把它转换成分类条的横向滚动。
+    if (event.deltaX === 0 && event.deltaY !== 0) {
+      event.preventDefault();
+      tabs.scrollLeft += event.deltaY;
+    }
+  };
 
   const markImageFailed = (path: string) => {
     setFailedImages((current) => {
@@ -55,7 +118,14 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   return (
     <div className="cover-thumbnail-picker">
       {categories.length > 1 && (
-        <div className="cover-thumbnail-tabs" role="tablist" aria-label="素材分类">
+        <div
+          ref={tabsRef}
+          className="cover-thumbnail-tabs"
+          role="tablist"
+          aria-label="素材分类"
+          onScroll={(event) => wrapTabsScroll(event.currentTarget)}
+          onWheel={handleTabsWheel}
+        >
           {categories.map((category) => (
             <button
               key={category.id}

@@ -1,60 +1,51 @@
-/**
- * 背景色系选择器
- * 每个颜色系只有一个可交互入口，内部色阶只用于展示封面实际采用的色阶关系。
- */
-
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
-  coverColors,
-  coverColorNames,
-  coverColorLabels,
-  type CoverColorName,
+  coverColorOptions,
+  type CoverColorId,
 } from '../tokens/colors';
 
 interface ColorPickerProps {
-  value: CoverColorName;
-  onChange: (color: CoverColorName) => void;
-  coverType?: 'project' | 'group';
+  value: CoverColorId;
+  onChange: (colorId: CoverColorId) => void;
 }
 
-const LEVELS = [1, 2, 3, 4, 5, 6] as const;
-
-export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange, coverType = 'group' }) => {
-  const activeLevel = coverType === 'project' ? 4 : 1;
+export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange }) => {
+  const selectedOption = useMemo(
+    () => coverColorOptions.find((option) => option.id === value),
+    [value],
+  );
 
   return (
     <div className="cover-color-picker">
-      <div className="cover-color-grid" role="listbox" aria-label="背景色系">
-        {coverColorNames.map((name) => {
-          const selected = value === name;
+      <div className="cover-color-picker__summary">
+        <div>
+          <strong>{selectedOption ? `${selectedOption.familyLabel} · ${selectedOption.step} 阶` : '选择背景色'}</strong>
+          <span>{selectedOption?.hex ?? '所有色阶均可直接使用'}</span>
+        </div>
+        <span className="cover-count-badge">{coverColorOptions.length} 色</span>
+      </div>
+
+      <div className="cover-color-palette" role="listbox" aria-label="背景色">
+        {coverColorOptions.map((option) => {
+          const selected = option.id === value;
           return (
             <button
-              key={name}
+              key={option.id}
               type="button"
-              className={`cover-color-option${selected ? ' is-selected' : ''}`}
               role="option"
               aria-selected={selected}
-              aria-label={`${coverColorLabels[name]}系背景色`}
-              title={`选择${coverColorLabels[name]}系背景色`}
-              onClick={() => onChange(name)}
+              aria-label={`${option.familyLabel}第${option.step}阶，${option.hex}`}
+              title={`${option.familyLabel} ${option.step} 阶 · ${option.hex}${option.aliases.length > 0 ? `（与${option.aliases.join('、')}相同）` : ''}`}
+              className={`cover-color-swatch-button${selected ? ' is-selected' : ''}`}
+              onClick={() => onChange(option.id)}
             >
-              <span className="cover-color-option__label">{coverColorLabels[name]}</span>
-              <span className="cover-color-option__swatches" aria-hidden="true">
-                {LEVELS.map((level) => (
-                  <span
-                    key={level}
-                    className={`cover-color-swatch${level === activeLevel ? ' is-active-level' : ''}`}
-                    style={{ backgroundColor: coverColors[name][level] }}
-                  />
-                ))}
-              </span>
+              <span className="cover-color-swatch-button__color" style={{ backgroundColor: option.hex }} />
             </button>
           );
         })}
       </div>
-      <p className="cover-color-picker__hint">
-        点击颜色系应用，色阶只作预览。当前封面使用第 {activeLevel} 档。
-      </p>
+
+      <p className="cover-picker-hint">点击小色块直接选择背景色。</p>
     </div>
   );
 };
