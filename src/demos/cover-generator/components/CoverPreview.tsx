@@ -1,6 +1,6 @@
 /**
  * 封面 Canvas 预览与导出绘制源。
- * 渲染层级：背景色 → 背景纹理 → 特殊装饰 → 存储标签 → 标题 → 人物。
+ * 渲染层级：背景色 → 背景纹理 → 存储标签 → 标题 → 人物。
  */
 
 /* eslint-disable react-refresh/only-export-components */
@@ -8,9 +8,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { CANVAS_SIZE, type CoverLayout } from '../tokens/layouts';
 import {
-  coverColors,
   getCoverColorHex,
-  getCoverColorOption,
   getTextColorHex,
 } from '../tokens/colors';
 import {
@@ -32,6 +30,8 @@ export interface CoverPreviewHandle {
 
 interface CoverPreviewProps {
   state: CoverPreviewState;
+  /** 字体未就绪时不绘制，避免 Canvas 先缓存系统回退字体。 */
+  fontStatus: 'loading' | 'ready' | 'error';
   retryToken?: number;
   onAssetsStatus?: (status: CoverAssetsStatus, failedPaths?: string[]) => void;
 }
@@ -48,9 +48,7 @@ export function drawCover(
     title,
     direction,
     showStorageTag,
-    backgroundColorId,
     textColorId,
-    textureId,
     figureId,
   } = state;
 
@@ -62,43 +60,8 @@ export function drawCover(
   ctx.save();
   ctx.scale(scale, scale);
 
-  // 1. 背景色：直接使用用户选择的具体色阶。
-  ctx.fillStyle = getCoverColorHex(backgroundColorId);
-  ctx.fillRect(0, 0, W, H);
-
-  // 2. 背景纹理。
-  if (textureId) {
-    const texture = textures.find((item) => item.id === textureId);
-    const textureImage = texture ? images.get(texture.path) : undefined;
-    if (textureImage && textureImage.complete && textureImage.naturalWidth > 0) {
-      ctx.save();
-      if (coverType === 'project') {
-        ctx.globalCompositeOperation = 'overlay';
-        ctx.globalAlpha = 0.72;
-        // Project textures use a centered, aspect-ratio-preserving cover crop so
-        // the texture reaches every edge of the 640×360 export canvas.
-        const textureScale = Math.max(W / textureImage.naturalWidth, H / textureImage.naturalHeight);
-        const textureWidth = textureImage.naturalWidth * textureScale;
-        const textureHeight = textureImage.naturalHeight * textureScale;
-        ctx.drawImage(
-          textureImage,
-          (W - textureWidth) / 2,
-          (H - textureHeight) / 2,
-          textureWidth,
-          textureHeight,
-        );
-      } else {
-        ctx.globalAlpha = 0.35;
-        ctx.drawImage(textureImage, 0, 0, W, H);
-      }
-      ctx.restore();
-    }
-  }
-
-  // 英语模板的浅色装饰由模板自带，不依赖人物素材。
-  if (coverType === 'group' && isEnglishTitle(title)) {
-    drawEnglishDecoration(ctx, backgroundColorId);
-  }
+  // 背景由两个独立层组成，后续可按层调整而不影响标题和人物。
+  drawCoverBackground(ctx, state, images, W, H);
 
   // 3. 存储标签。
   if (coverType === 'group' && showStorageTag) {
@@ -125,6 +88,67 @@ export function drawCover(
   }
 
   ctx.restore();
+}
+
+/** 背景层 1：用户选择的纯色底。 */
+function drawSolidColorBackground(
+  ctx: CanvasRenderingContext2D,
+  backgroundColorId: string,
+  width: number,
+  height: number,
+) {
+  ctx.fillStyle = getCoverColorHex(backgroundColorId);
+  ctx.fillRect(0, 0, width, height);
+}
+
+/** 背景层 2：纹理图片，以 Multiply + 50% 透明度叠加。 */
+function drawTextureBackground(
+  ctx: CanvasRenderingContext2D,
+  textureId: string,
+  coverType: CoverPreviewState['coverType'],
+  images: Map<string, HTMLImageElement>,
+  width: number,
+  height: number,
+) {
+  const texture = textures.find((item) => item.id === textureId);
+  const textureImage = texture ? images.get(texture.path) : undefined;
+  if (!textureImage || !textureImage.complete || textureImage.naturalWidth <= 0) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.globalAlpha = 0.5;
+  if (coverType === 'project') {
+    // Project textures use a centered, aspect-ratio-preserving cover crop so
+    // the texture reaches every edge of the 640×360 export canvas.
+    const textureScale = Math.max(width / textureImage.naturalWidth, height / textureImage.naturalHeight);
+    const textureWidth = textureImage.naturalWidth * textureScale;
+    const textureHeight = textureImage.naturalHeight * textureScale;
+    ctx.drawImage(
+      textureImage,
+      (width - textureWidth) / 2,
+      (height - textureHeight) / 2,
+      textureWidth,
+      textureHeight,
+    );
+  } else {
+    ctx.drawImage(textureImage, 0, 0, width, height);
+  }
+  ctx.restore();
+}
+
+function drawCoverBackground(
+  ctx: CanvasRenderingContext2D,
+  state: CoverPreviewState,
+  images: Map<string, HTMLImageElement>,
+  width: number,
+  height: number,
+) {
+  drawSolidColorBackground(ctx, state.backgroundColorId, width, height);
+
+  if (state.textureId) {
+    drawTextureBackground(ctx, state.textureId, state.coverType, images, width, height);
+  }
+
 }
 
 function drawStorageTag(ctx: CanvasRenderingContext2D) {
@@ -160,29 +184,6 @@ function drawStorageTag(ctx: CanvasRenderingContext2D) {
   ctx.restore();
 }
 
-function drawEnglishDecoration(
-  ctx: CanvasRenderingContext2D,
-  backgroundColorId: string,
-) {
-  const family = getCoverColorOption(backgroundColorId).family;
-
-  ctx.save();
-  ctx.globalAlpha = 0.08;
-  ctx.fillStyle = coverColors[family][3];
-  const blobs = [
-    { x: 50, y: 38, w: 160, h: 78, r: 36 },
-    { x: 460, y: 76, w: 170, h: 86, r: 40 },
-    { x: 168, y: 278, w: 196, h: 70, r: 34 },
-    { x: 520, y: 290, w: 110, h: 60, r: 28 },
-  ];
-  blobs.forEach(({ x, y, w, h, r }) => {
-    ctx.beginPath();
-    ctx.roundRect(x, y, w, h, r);
-    ctx.fill();
-  });
-  ctx.restore();
-}
-
 function drawTitle(
   ctx: CanvasRenderingContext2D,
   state: CoverPreviewState,
@@ -205,7 +206,7 @@ function drawTitle(
 
   ctx.save();
   ctx.fillStyle = getTextColorHex(backgroundColorId, textColorId);
-  ctx.font = `${coverType === 'project' ? 'normal' : '700'} ${textLayout.fontSize}px "${fontFamily}", "PingFang SC", sans-serif`;
+  ctx.font = `normal ${textLayout.fontSize}px "${fontFamily}", "PingFang SC", sans-serif`;
   ctx.textAlign = textLayout.align;
   ctx.textBaseline = textLayout.vAlign === 'middle' ? 'middle' : 'top';
 
@@ -271,7 +272,7 @@ function drawEnglishTitle(ctx: CanvasRenderingContext2D, title: string, textColo
 
   ctx.font = `700 320px "${FONT_FAMILIES.englishTitle}", sans-serif`;
   const levelWidth = ctx.measureText(level).width;
-  ctx.font = `700 120px "${FONT_FAMILIES.groupTitle}", "PingFang SC", sans-serif`;
+  ctx.font = `normal 120px "${FONT_FAMILIES.groupTitle}", "PingFang SC", sans-serif`;
   const prefixWidth = prefix ? ctx.measureText(prefix).width : 0;
   const totalWidth = prefixWidth + gap + levelWidth;
   let x = centerX - totalWidth / 2;
@@ -348,15 +349,23 @@ export function collectImagePaths(state: CoverPreviewState): string[] {
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.crossOrigin = 'anonymous';
+    const resolvedSrc = typeof window === 'undefined'
+      ? src
+      : new URL(src, window.location.href).toString();
+    const isCrossOrigin = typeof window !== 'undefined'
+      && new URL(resolvedSrc).origin !== window.location.origin;
+
+    // 本地静态素材不需要 CORS；只有跨域资源才设置 anonymous，避免开发服务器
+    // 未返回 CORS 响应头时让 Canvas 预览误判为素材加载失败。
+    if (isCrossOrigin) image.crossOrigin = 'anonymous';
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`素材加载失败: ${src}`));
-    image.src = src;
+    image.onerror = () => reject(new Error(`素材加载失败: ${resolvedSrc}`));
+    image.src = resolvedSrc;
   });
 }
 
 export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
-  ({ state, retryToken = 0, onAssetsStatus }, ref) => {
+  ({ state, fontStatus, retryToken = 0, onAssetsStatus }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const imagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
@@ -377,6 +386,12 @@ export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
         canvas.height = canvasSize.height;
         const context = canvas.getContext('2d');
         if (!context) return;
+
+        if (fontStatus === 'loading') {
+          context.clearRect(0, 0, canvas.width, canvas.height);
+          onAssetsStatus?.('loading');
+          return;
+        }
 
         onAssetsStatus?.('loading');
         const failedPaths: string[] = [];
@@ -400,7 +415,7 @@ export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
       return () => {
         cancelled = true;
       };
-    }, [onAssetsStatus, retryToken, state]);
+    }, [fontStatus, onAssetsStatus, retryToken, state]);
 
     const canvasSize = state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
 

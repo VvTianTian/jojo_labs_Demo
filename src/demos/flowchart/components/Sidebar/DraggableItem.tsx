@@ -16,6 +16,7 @@ export function DraggableItem({ id, data, children }: DraggableItemProps) {
     <div
       draggable
       onDragStart={handleDragStart}
+      data-drag-item-id={id}
       className="cursor-grab active:cursor-grabbing select-none"
     >
       {children}

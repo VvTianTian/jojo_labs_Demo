@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Check,
+  ChevronDown,
   ChevronRight,
   Image as ImageIcon,
-  Palette,
   Type as TypeIcon,
-  Users,
   X,
 } from 'lucide-react';
 import { Switch } from '../../../components/Switch';
@@ -58,7 +58,7 @@ const RESOURCE_PANEL_HEIGHTS: Record<ResourcePanel, number> = {
 
 interface ResourceMenuButtonProps {
   panel: ResourcePanel;
-  icon: React.ReactNode;
+  preview: React.ReactNode;
   title: string;
   summary: string;
   open: boolean;
@@ -74,34 +74,149 @@ interface CoverTypeControlProps {
 const COVER_TYPE_OPTIONS: Array<{
   value: CoverDraft['coverType'];
   label: string;
-  size: string;
 }> = [
-  { value: 'project', label: '项目封面', size: '640 × 360' },
-  { value: 'group', label: '项目组封面', size: '675 × 384' },
+  { value: 'project', label: '项目封面' },
+  { value: 'group', label: '项目组封面' },
 ];
 
 export function CoverTypeControl({ value, onChange }: CoverTypeControlProps) {
+  const controlRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [open, setOpen] = useState(false);
+  const selectedIndex = Math.max(0, COVER_TYPE_OPTIONS.findIndex((option) => option.value === value));
+  const selectedOption = COVER_TYPE_OPTIONS[selectedIndex] ?? COVER_TYPE_OPTIONS[0];
+
+  const focusOption = (index: number) => {
+    window.requestAnimationFrame(() => optionRefs.current[index]?.focus());
+  };
+
+  const selectOption = (nextValue: CoverDraft['coverType']) => {
+    onChange(nextValue);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && controlRef.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [open]);
+
+  const handleTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Tab') {
+      setOpen(false);
+      return;
+    }
+
+    if (event.key === 'Escape' && open) {
+      event.preventDefault();
+      setOpen(false);
+      return;
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setOpen(true);
+      focusOption(event.key === 'ArrowUp' ? COVER_TYPE_OPTIONS.length - 1 : selectedIndex);
+    }
+  };
+
+  const handleOptionKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === 'Tab') {
+      setOpen(false);
+      return;
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      const nextIndex = (index + direction + COVER_TYPE_OPTIONS.length) % COVER_TYPE_OPTIONS.length;
+      optionRefs.current[nextIndex]?.focus();
+      return;
+    }
+
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      const nextIndex = event.key === 'Home' ? 0 : COVER_TYPE_OPTIONS.length - 1;
+      optionRefs.current[nextIndex]?.focus();
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectOption(COVER_TYPE_OPTIONS[index].value);
+    }
+  };
+
   return (
-    <div className="cover-segmented-control cover-type-control" role="group" aria-label="封面类型">
-      {COVER_TYPE_OPTIONS.map((option) => (
+    <div
+      ref={controlRef}
+      className="cover-type-control"
+      role="group"
+      aria-label="封面类型"
+    >
+      <div className="cover-type-control__select-wrap">
         <button
-          key={option.value}
+          id="cover-type-select"
+          ref={triggerRef}
           type="button"
-          className={`cover-segmented-control__option${value === option.value ? ' is-selected' : ''}`}
-          aria-pressed={value === option.value}
-          aria-label={`${option.label}，尺寸 ${option.size}`}
-          onClick={() => onChange(option.value)}
+          className={`cover-type-control__select${open ? ' is-open' : ''}`}
+          aria-label="封面类型"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls="cover-type-menu"
+          role="combobox"
+          onClick={() => setOpen((current) => !current)}
+          onKeyDown={handleTriggerKeyDown}
         >
-          {option.label}
+          <span>{selectedOption.label}</span>
+          <ChevronDown className="cover-type-control__select-icon" size={16} aria-hidden="true" />
         </button>
-      ))}
+        {open && (
+          <div id="cover-type-menu" className="cover-type-control__menu" role="listbox" aria-label="封面类型选项">
+            {COVER_TYPE_OPTIONS.map((option, index) => {
+              const selected = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  id={`cover-type-option-${option.value}`}
+                  ref={(element) => { optionRefs.current[index] = element; }}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className={`cover-type-control__option${selected ? ' is-selected' : ''}`}
+                  onClick={() => selectOption(option.value)}
+                  onKeyDown={(event) => handleOptionKeyDown(event, index)}
+                >
+                  <span>{option.label}</span>
+                  {selected && <Check size={14} aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function ResourceMenuButton({
   panel,
-  icon,
+  preview,
   title,
   summary,
   open,
@@ -118,25 +233,19 @@ function ResourceMenuButton({
       aria-expanded={open}
       aria-controls={panelId}
       aria-haspopup="dialog"
+      aria-label={`${title}，当前${summary}`}
+      title={`${title}：${summary}`}
       onClick={onClick}
     >
-      <span className="cover-resource-menu__trigger-icon" aria-hidden="true">{icon}</span>
+      <span className={`cover-resource-menu__preview cover-resource-menu__preview--${panel}`} aria-hidden="true">
+        {preview}
+      </span>
       <span className="cover-resource-menu__trigger-copy">
         <strong>{title}</strong>
-        <span>{summary}</span>
       </span>
       <ChevronRight size={16} aria-hidden="true" />
     </button>
   );
-}
-
-function getSelectedFigureName(
-  categories: ThumbnailCategory[],
-  figureId: string,
-): string {
-  return categories
-    .flatMap((category) => category.items)
-    .find((figure) => figure.id === figureId)?.name ?? '未选择';
 }
 
 export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
@@ -193,13 +302,12 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
   const selectedBackground = coverColorOptions.find((option) => option.id === backgroundColorId);
   const selectedTextColor = getTextColorOptions(backgroundColorId)
     .find((option) => option.id === textColorId);
-  const selectedTextureName = textures.find((texture) => texture.id === textureId)?.name ?? '无';
-  const selectedFigureName = getSelectedFigureName(figureCategories, figureId);
+  const selectedTexture = textures.find((texture) => texture.id === textureId);
+  const selectedFigure = figureCategories
+    .flatMap((category) => category.items)
+    .find((figure) => figure.id === figureId);
   const selectedFigureCategory = figureCategories
     .find((category) => category.items.some((item) => item.id === figureId))?.name;
-  const selectedFigureSummary = selectedFigureCategory
-    ? `${selectedFigureCategory} · ${selectedFigureName}`
-    : selectedFigureName;
   const hasFigure = Boolean(layout.figure) && !isEnglish;
 
   const updatePanelPosition = useCallback((panel: ResourcePanel) => {
@@ -326,7 +434,7 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
               value={textColorId}
               onChange={(nextTextColorId) => onChange({ textColorId: nextTextColorId })}
             />
-            <p className="cover-picker-hint cover-picker-hint--compact">只显示与当前背景有足够对比度的颜色。</p>
+            <p className="cover-picker-hint cover-picker-hint--compact">白色始终可选；其他颜色按对比度提供推荐。</p>
           </div>
         )}
 
@@ -434,7 +542,12 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
         <div className="cover-resource-menu">
           <ResourceMenuButton
             panel="color"
-            icon={<Palette size={17} />}
+            preview={
+              <span
+                className="cover-resource-menu__color-swatch"
+                style={{ backgroundColor: selectedBackground?.hex ?? 'transparent' }}
+              />
+            }
             title="颜色"
             summary={`${selectedBackground?.familyLabel ?? '未选择'} · ${selectedBackground?.step ?? ''}阶${selectedTextColor ? ` · 文字${selectedTextColor.label}` : ''}`}
             open={activePanel === 'color'}
@@ -444,9 +557,9 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
           {renderResourcePopover('color')}
           <ResourceMenuButton
             panel="texture"
-            icon={<ImageIcon size={17} />}
+            preview={selectedTexture ? <img src={selectedTexture.path} alt="" /> : <span>无</span>}
             title="纹理"
-            summary={selectedTextureName}
+            summary={selectedTexture?.name ?? '无'}
             open={activePanel === 'texture'}
             buttonRef={(element) => { resourceTriggerRefs.current.texture = element; }}
             onClick={() => toggleResourcePanel('texture')}
@@ -456,9 +569,11 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
             <>
               <ResourceMenuButton
                 panel="figure"
-                icon={<Users size={17} />}
+                preview={selectedFigure ? <img src={selectedFigure.path} alt="" /> : <span>无</span>}
                 title="人物"
-              summary={selectedFigureSummary}
+                summary={selectedFigureCategory && selectedFigure
+                  ? `${selectedFigureCategory} · ${selectedFigure.name}`
+                  : selectedFigure?.name ?? '未选择'}
                 open={activePanel === 'figure'}
                 buttonRef={(element) => { resourceTriggerRefs.current.figure = element; }}
                 onClick={() => toggleResourcePanel('figure')}

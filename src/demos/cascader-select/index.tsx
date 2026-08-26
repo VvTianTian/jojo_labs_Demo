@@ -42,18 +42,6 @@ const CASCADER_DATA: CascaderNode[] = [
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** 根据 id 查找节点 */
-function findNode(nodes: CascaderNode[], id: string): CascaderNode | null {
-  for (const node of nodes) {
-    if (node.id === id) return node;
-    if (node.children) {
-      const found = findNode(node.children, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
 /** 构建 id -> node 的映射 */
 function buildNodeMap(nodes: CascaderNode[]): Map<string, CascaderNode> {
   const map = new Map<string, CascaderNode>();
@@ -65,35 +53,6 @@ function buildNodeMap(nodes: CascaderNode[]): Map<string, CascaderNode> {
   };
   walk(nodes);
   return map;
-}
-
-/** 构建 id -> parentNode 的映射 */
-function buildParentNodeMap(nodes: CascaderNode[]): Map<string, CascaderNode | null> {
-  const map = new Map<string, CascaderNode | null>();
-  const walk = (list: CascaderNode[], parent: CascaderNode | null) => {
-    for (const n of list) {
-      map.set(n.id, parent);
-      if (n.children) walk(n.children, n);
-    }
-  };
-  walk(nodes, null);
-  return map;
-}
-
-/** 获取从根到指定节点的路径 */
-function getPathToNode(
-  nodes: CascaderNode[],
-  targetId: string,
-  path: CascaderNode[] = []
-): CascaderNode[] | null {
-  for (const node of nodes) {
-    if (node.id === targetId) return [...path, node];
-    if (node.children) {
-      const found = getPathToNode(node.children, targetId, [...path, node]);
-      if (found) return found;
-    }
-  }
-  return null;
 }
 
 /* ------------------------------------------------------------------ */

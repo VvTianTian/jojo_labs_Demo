@@ -1,4 +1,4 @@
-import { BookOpen, GitBranch, CheckSquare, ListChecks, Image } from "lucide-react";
+import { BookOpen, GitBranch, CheckSquare, ListChecks, Image, WandSparkles } from "lucide-react";
 
 export interface DemoConfig {
   id: string;
@@ -11,8 +11,16 @@ export interface DemoConfig {
 
 export const demos: DemoConfig[] = [
   {
+    id: "animation-book",
+    name: "动画书生产工具",
+    description: "教研人员与制作人员协作的 16:9 动画书生产 Demo",
+    path: "/animation-book",
+    icon: WandSparkles,
+    color: "brand",
+  },
+  {
     id: "picture-book",
-    name: "绘本编辑器",
+    name: "翻翻书编辑器",
     description: "支持封面/页面/语音/多角色协作的绘本制作工具",
     path: "/picture-book",
     icon: BookOpen,

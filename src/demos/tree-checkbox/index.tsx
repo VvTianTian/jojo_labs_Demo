@@ -11,8 +11,6 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-type CheckState = Record<string, boolean>;
-
 /* ------------------------------------------------------------------ */
 /*  Sample data                                                        */
 /* ------------------------------------------------------------------ */
@@ -379,7 +377,8 @@ export function TreeCheckboxDemo() {
   const toggleExpand = useCallback((id: string) => {
     setExpandedSet((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
@@ -540,7 +539,12 @@ export function TreeCheckboxDemo() {
   /* ---- select / deselect all ---- */
   const selectAll = () => {
     const all = new Set<string>();
-    const walk = (nodes: TreeNode[]) => nodes.forEach((n) => { all.add(n.id); n.children && walk(n.children); });
+    const walk = (nodes: TreeNode[]) => {
+      nodes.forEach((node) => {
+        all.add(node.id);
+        if (node.children) walk(node.children);
+      });
+    };
     walk(TREE_DATA);
     setCheckedSet(all);
   };

@@ -3,7 +3,7 @@
  * 分类切换和网格内部滚动都在组件内完成，素材数量增加时不改变外层布局高度。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, ImageOff } from 'lucide-react';
 
 export interface ThumbnailItem {
@@ -41,7 +41,6 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? '');
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
   const tabsRef = useRef<HTMLDivElement | null>(null);
-  const isWrappingTabsRef = useRef(false);
 
   const resolvedActiveCategory = categories.some((category) => category.id === activeCategory)
     ? activeCategory
@@ -50,34 +49,9 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 
   useEffect(() => {
     if (tabsRef.current) {
-      isWrappingTabsRef.current = true;
       tabsRef.current.scrollLeft = 0;
-      window.requestAnimationFrame(() => {
-        isWrappingTabsRef.current = false;
-      });
     }
   }, [categories]);
-
-  const wrapTabsScroll = useCallback((tabs: HTMLDivElement) => {
-    if (isWrappingTabsRef.current) return;
-
-    const maxScrollLeft = tabs.scrollWidth - tabs.clientWidth;
-    if (maxScrollLeft <= 1) return;
-
-    if (tabs.scrollLeft <= 0) {
-      isWrappingTabsRef.current = true;
-      tabs.scrollLeft = maxScrollLeft - 1;
-    } else if (tabs.scrollLeft >= maxScrollLeft - 1) {
-      isWrappingTabsRef.current = true;
-      tabs.scrollLeft = 1;
-    }
-
-    if (isWrappingTabsRef.current) {
-      window.requestAnimationFrame(() => {
-        isWrappingTabsRef.current = false;
-      });
-    }
-  }, []);
 
   const handleTabsWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const tabs = event.currentTarget;
@@ -93,9 +67,15 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
     const isAtStart = tabs.scrollLeft <= 0;
     const isAtEnd = tabs.scrollLeft >= maxScrollLeft - 1;
 
-    if ((isMovingRight && isAtEnd) || (!isMovingRight && isAtStart)) {
+    if (isMovingRight && isAtEnd) {
       event.preventDefault();
-      tabs.scrollLeft = isMovingRight ? 1 : maxScrollLeft - 1;
+      tabs.scrollLeft = 0;
+      return;
+    }
+
+    if (!isMovingRight && isAtStart) {
+      event.preventDefault();
+      tabs.scrollLeft = maxScrollLeft;
       return;
     }
 
@@ -123,7 +103,6 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
           className="cover-thumbnail-tabs"
           role="tablist"
           aria-label="素材分类"
-          onScroll={(event) => wrapTabsScroll(event.currentTarget)}
           onWheel={handleTabsWheel}
         >
           {categories.map((category) => (

@@ -278,7 +278,10 @@ export const groupFigureCategories: FigureCategory[] = [
 export const FONT_PATHS = {
   /** 项目封面标题字体 */
   projectTitle: `${BASE.replace('/assets', '')}/fonts/FZLanTYJW_Da.TTF`,
-  /** 项目组封面中文标题字体 */
+  /**
+   * Figma 节点标注为 FZLanTingYuanS-B-GB；本地 Da（内部名 EB）字形最接近，
+   * 通过 FontFace 的 Regular 加载，避免再叠加 Canvas 合成粗体。
+   */
   groupTitle: `${BASE.replace('/assets', '')}/fonts/FZLanTYJW_Da.TTF`,
   /** 英语布局字体（L1/L2 等） */
   englishTitle: `${BASE.replace('/assets', '')}/fonts/MohrRounded-Heavy.ttf`,

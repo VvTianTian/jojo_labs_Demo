@@ -75,7 +75,7 @@ function recomputeStatus(node: FlowNode): NodeStatus {
 
 export const useFlowchartStore = create<FlowchartStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       data: { ...initialData },
 
       addNode: (type, position) => {

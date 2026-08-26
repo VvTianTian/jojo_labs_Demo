@@ -144,6 +144,9 @@ export interface TextColorOption {
   source?: string;
 }
 
+/** 大字号标题使用 WCAG 大文本的最低对比度门槛。 */
+export const TEXT_CONTRAST_THRESHOLD = 3;
+
 const WHITE_TEXT: TextColorOption = { id: 'white', label: '白色', hex: '#FFFFFF' };
 const INK_TEXT: TextColorOption = { id: 'ink', label: '深灰', hex: '#353E42', source: '基础色' };
 
@@ -168,35 +171,66 @@ export function contrastRatio(first: string, second: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** 返回与当前背景有足够对比度的文字颜色建议。 */
+const DARK_PALETTE_TEXT_OPTIONS: TextColorOption[] = coverColorNames.map((family) => ({
+  id: `text-${family}`,
+  label: `${coverColorLabels[family]}深色`,
+  hex: coverColors[family][6].toUpperCase(),
+  source: `色板 ${coverColorLabels[family]} 6`,
+}));
+
+const ALL_TEXT_COLOR_OPTIONS: TextColorOption[] = [
+  WHITE_TEXT,
+  INK_TEXT,
+  ...DARK_PALETTE_TEXT_OPTIONS,
+];
+
+/** 返回文字颜色选择器中的颜色：白色始终保留，其余只展示推荐颜色。 */
 export function getTextColorOptions(backgroundColorId: CoverColorId): TextColorOption[] {
   const background = getCoverColorHex(backgroundColorId);
-  const darkPaletteOptions = coverColorNames.map((family) => {
-    const hex = coverColors[family][6].toUpperCase();
-    return {
-      id: `text-${family}`,
-      label: `${coverColorLabels[family]}深色`,
-      hex,
-      source: `色板 ${coverColorLabels[family]} 6`,
-    } satisfies TextColorOption;
-  });
 
   const seen = new Set<string>();
-  const candidates = [WHITE_TEXT, INK_TEXT, ...darkPaletteOptions].filter((option) => {
+  return ALL_TEXT_COLOR_OPTIONS.filter((option) => {
+    const isWhite = option.id === WHITE_TEXT.id;
+    if (!isWhite && contrastRatio(background, option.hex) < TEXT_CONTRAST_THRESHOLD) {
+      return false;
+    }
     if (seen.has(option.hex)) return false;
     seen.add(option.hex);
-    return contrastRatio(background, option.hex) >= 3;
+    return true;
   });
+}
 
-  return candidates.length > 0 ? candidates : [INK_TEXT];
+/** 获取当前背景下对比度最高的推荐字色。 */
+export function getRecommendedTextColorOption(backgroundColorId: CoverColorId): TextColorOption {
+  const background = getCoverColorHex(backgroundColorId);
+  const safeOptions = ALL_TEXT_COLOR_OPTIONS.filter(
+    (option) => contrastRatio(background, option.hex) >= TEXT_CONTRAST_THRESHOLD,
+  );
+
+  return safeOptions.reduce<TextColorOption | undefined>((best, option) => {
+    if (!best) return option;
+    return contrastRatio(background, option.hex) > contrastRatio(background, best.hex)
+      ? option
+      : best;
+  }, undefined) ?? WHITE_TEXT;
 }
 
 export function getTextColorHex(
   backgroundColorId: CoverColorId,
   textColorId: string,
 ): string {
-  const match = getTextColorOptions(backgroundColorId).find((option) => option.id === textColorId);
-  return match?.hex ?? getTextColorOptions(backgroundColorId)[0].hex;
+  const match = ALL_TEXT_COLOR_OPTIONS.find((option) => option.id === textColorId);
+  return match?.hex ?? getRecommendedTextColorOption(backgroundColorId).hex;
+}
+
+export function isTextColorContrastSufficient(
+  backgroundColorId: CoverColorId,
+  textColorId: string,
+): boolean {
+  return contrastRatio(
+    getCoverColorHex(backgroundColorId),
+    getTextColorHex(backgroundColorId, textColorId),
+  ) >= TEXT_CONTRAST_THRESHOLD;
 }
 
 /** 获取所有色系名称列表 */

@@ -17,7 +17,15 @@ import {
 import { exportCoverImage, buildExportFilename } from './utils/exportImage';
 import { loadCoverFonts, type FontLoadStatus } from './utils/fontLoader';
 import { validateCoverTitle } from './utils/coverValidation';
-import { getTextColorOptions, type CoverColorId } from './tokens/colors';
+import {
+  contrastRatio,
+  getCoverColorHex,
+  getRecommendedTextColorOption,
+  getTextColorHex,
+  getTextColorOptions,
+  TEXT_CONTRAST_THRESHOLD,
+  type CoverColorId,
+} from './tokens/colors';
 import { groupFigureCategories, projectFigureCategories, textures } from './tokens/assets';
 import { CANVAS_SIZE } from './tokens/layouts';
 import type { CoverDraft, CoverType, ExportScale } from './types';
@@ -67,6 +75,21 @@ export const CoverGenerator: React.FC = () => {
     () => validateCoverTitle(formState.coverType, formState.title),
     [formState.coverType, formState.title],
   );
+  const textContrastAlert = useMemo(() => {
+    const ratio = contrastRatio(
+      getCoverColorHex(formState.backgroundColorId),
+      getTextColorHex(formState.backgroundColorId, formState.textColorId),
+    );
+
+    if (ratio >= TEXT_CONTRAST_THRESHOLD) return null;
+
+    return {
+      ratio,
+      recommendation: getRecommendedTextColorOption(formState.backgroundColorId),
+    };
+  }, [formState.backgroundColorId, formState.textColorId]);
+  const [contrastToastDismissed, setContrastToastDismissed] = useState(false);
+  const contrastToast = textContrastAlert && !contrastToastDismissed ? textContrastAlert : null;
   const previewSize = formState.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
   const isReadyToExport = validation.isValid
     && fontStatus === 'ready'
@@ -74,6 +97,7 @@ export const CoverGenerator: React.FC = () => {
     && !exporting;
 
   const handleFormChange = useCallback((partial: Partial<CoverFormState>) => {
+    setContrastToastDismissed(false);
     setFormState((current) => {
       if (partial.coverType && partial.coverType !== current.coverType) {
         return createDefaultDraft(partial.coverType);
@@ -109,6 +133,13 @@ export const CoverGenerator: React.FC = () => {
       active = false;
     };
   }, [fontRetryToken]);
+
+  useEffect(() => {
+    if (!textContrastAlert) return undefined;
+
+    const timeoutId = window.setTimeout(() => setContrastToastDismissed(true), 5200);
+    return () => window.clearTimeout(timeoutId);
+  }, [textContrastAlert]);
 
   const handleAssetsStatus = useCallback((status: CoverAssetsStatus, failedPaths: string[] = []) => {
     setAssetStatus(status);
@@ -236,6 +267,7 @@ export const CoverGenerator: React.FC = () => {
             <CoverPreview
               ref={previewRef}
               state={formState}
+              fontStatus={fontStatus}
               retryToken={assetRetryToken}
               onAssetsStatus={handleAssetsStatus}
             />
@@ -268,6 +300,25 @@ export const CoverGenerator: React.FC = () => {
           )}
         </main>
       </div>
+
+      {contrastToast && (
+        <div className="cover-contrast-toast" role="status" aria-live="polite">
+          <AlertCircle size={17} aria-hidden="true" />
+          <div className="cover-contrast-toast__copy">
+            <strong>文字颜色对比度不足</strong>
+            <span>
+              当前对比度 {contrastToast.ratio.toFixed(1)}:1，推荐使用{contrastToast.recommendation.label}。
+            </span>
+          </div>
+          <button
+            type="button"
+            className="cover-contrast-toast__action"
+            onClick={() => handleFormChange({ textColorId: contrastToast.recommendation.id })}
+          >
+            更换推荐字色
+          </button>
+        </div>
+      )}
     </div>
   );
 };
