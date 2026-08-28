@@ -99,6 +99,8 @@ const BASIC_INFO_MUSIC_OPTIONS = [
   { id: "pacific", title: "太平洋的风--胡德夫", duration: "04:43" },
 ];
 
+const ANIMATION_BOOK_GRID_ASSET = "/animation-book/assets/animation-book-grid-system.png";
+
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
@@ -1443,16 +1445,13 @@ function PageThumbnail({
 
 function SafeAreaOverlay() {
   return (
-    <div className="ab-safe-area-overlay" aria-hidden="true">
-      <div className="ab-safe-guide ab-safe-guide--outer"><span>画布 1920 × 1080</span></div>
-      <div className="ab-safe-guide ab-safe-guide--tablet"><span>平板 1440 × 1080</span></div>
-      <div className="ab-safe-guide ab-safe-guide--mobile"><span>手机 1920 × 810</span></div>
-      <div className="ab-safe-guide ab-safe-guide--safe"><span>安全区 1440 × 810</span></div>
-      <div className="ab-safe-guide ab-safe-guide--phone"><span>圆角安全区 1756 × 810</span></div>
-      <div className="ab-safe-guide ab-safe-guide--interaction"><span>互动安全区 1360 × 730</span></div>
-      <div className="ab-safe-guide ab-safe-guide--core"><span>版心 1248 × 720</span></div>
-      <div className="ab-safe-center" />
-    </div>
+    <img
+      className="ab-safe-area-overlay"
+      src={ANIMATION_BOOK_GRID_ASSET}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+    />
   );
 }
 
