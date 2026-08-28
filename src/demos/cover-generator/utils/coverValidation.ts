@@ -49,7 +49,7 @@ export function validateCoverTitle(
       isEmpty: false,
       isEnglish: true,
       charCount: 2,
-      message: '特殊标题布局 · 自动隐藏人物',
+      message: '特殊标题布局 · 自动隐藏角色',
     };
   }
 

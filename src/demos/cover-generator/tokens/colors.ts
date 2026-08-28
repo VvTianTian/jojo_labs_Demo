@@ -1,7 +1,7 @@
 /**
  * 封面生成器颜色 Token
  * 来源：Figma 色板（已过滤废弃 Token）
- * 15 个色系 × 6 阶
+ * 14 个色系 × 6 阶
  */
 
 export interface CoverColorScale {
@@ -23,7 +23,6 @@ export type CoverColorName =
   | 'purple'
   | 'englishPurple'
   | 'brown'
-  | 'integrate'
   | 'blue'
   | 'cyan'
   | 'green'
@@ -40,7 +39,6 @@ export const coverColorLabels: Record<CoverColorName, string> = {
   purple: '紫',
   englishPurple: '英语紫',
   brown: '棕',
-  integrate: '综合',
   blue: '蓝',
   cyan: '青',
   green: '绿',
@@ -58,7 +56,6 @@ export const coverColors: Record<CoverColorName, CoverColorScale> = {
   purple:        { 1: '#f9f5ff', 2: '#f3ebfc', 3: '#c8a0fa', 4: '#ae84e3', 5: '#8d4bde', 6: '#4e2680' },
   englishPurple: { 1: '#f7f5ff', 2: '#f0edff', 3: '#afa0fa', 4: '#9484e3', 5: '#644bde', 6: '#2f2270' },
   brown:         { 1: '#fef7e5', 2: '#f0dcc2', 3: '#e0bf94', 4: '#C09660', 5: '#986c31', 6: '#664314' },
-  integrate:     { 1: '#fcf9de', 2: '#fcf3ba', 3: '#ffd21f', 4: '#f5c400', 5: '#c29800', 6: '#544300' },
   blue:          { 1: '#ebf9ff', 2: '#dbf3ff', 3: '#87d7ff', 4: '#33bbff', 5: '#0090d9', 6: '#0c567a' },
   cyan:          { 1: '#edfbfc', 2: '#c2f8fc', 3: '#7fe2eb', 4: '#00c2d4', 5: '#009aa8', 6: '#00484f' },
   green:         { 1: '#effaeb', 2: '#d2f7c6', 3: '#a0d98d', 4: '#5dc43b', 5: '#4aa12d', 6: '#155200' },
@@ -86,7 +83,7 @@ export interface CoverColorOption {
 const COLOR_LEVELS: CoverColorLevel[] = [1, 2, 3, 4, 5, 6];
 
 /**
- * 将 15×6 色板展开为具体颜色，并按十六进制值合并完全重复项。
+ * 将 14×6 色板展开为具体颜色，并按十六进制值合并完全重复项。
  * 近似但不同的颜色保留，避免误删主题语义。
  */
 function buildCoverColorOptions(): CoverColorOption[] {
@@ -213,6 +210,19 @@ export function getRecommendedTextColorOption(backgroundColorId: CoverColorId): 
       ? option
       : best;
   }, undefined) ?? WHITE_TEXT;
+}
+
+/**
+ * 获取当前产品规则下的固定默认字色：背景第 1–3 阶使用同色相第 6 阶，
+ * 背景第 4–6 阶统一使用白色。
+ */
+export function getDefaultTextColorOption(backgroundColorId: CoverColorId): TextColorOption {
+  const background = getCoverColorOption(backgroundColorId);
+
+  if (background.step >= 4) return WHITE_TEXT;
+
+  return ALL_TEXT_COLOR_OPTIONS.find((option) => option.id === `text-${background.family}`)
+    ?? getRecommendedTextColorOption(backgroundColorId);
 }
 
 export function getTextColorHex(

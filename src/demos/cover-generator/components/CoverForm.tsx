@@ -3,7 +3,9 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Dices,
   Image as ImageIcon,
+  Loader2,
   Type as TypeIcon,
   X,
 } from 'lucide-react';
@@ -19,6 +21,7 @@ import {
 import {
   coverColorOptions,
   getTextColorOptions,
+  getDefaultTextColorOption,
   type CoverColorId,
 } from '../tokens/colors';
 import {
@@ -33,7 +36,11 @@ export type CoverFormState = CoverDraft;
 
 interface CoverFormProps {
   state: CoverFormState;
+  randomizing: boolean;
+  randomDisabled: boolean;
+  randomError: string;
   onChange: (partial: Partial<CoverFormState>) => void;
+  onRandomize: () => void;
 }
 
 type ResourcePanel = 'color' | 'texture' | 'figure';
@@ -41,7 +48,7 @@ type ResourcePanel = 'color' | 'texture' | 'figure';
 const RESOURCE_PANEL_LABELS: Record<ResourcePanel, string> = {
   color: '颜色',
   texture: '纹理',
-  figure: '人物',
+  figure: '角色',
 };
 
 const RESOURCE_PANEL_WIDTHS: Record<ResourcePanel, number> = {
@@ -248,7 +255,14 @@ function ResourceMenuButton({
   );
 }
 
-export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
+export const CoverForm: React.FC<CoverFormProps> = ({
+  state,
+  randomizing,
+  randomDisabled,
+  randomError,
+  onChange,
+  onRandomize,
+}) => {
   const {
     coverType,
     title,
@@ -384,11 +398,9 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
   }, [activePanel, closeResourcePanel, updatePanelPosition]);
 
   const handleBackgroundChange = (nextBackgroundColorId: CoverColorId) => {
-    const safeTextColors = getTextColorOptions(nextBackgroundColorId);
-    const textColorStillSafe = safeTextColors.some((option) => option.id === textColorId);
     onChange({
       backgroundColorId: nextBackgroundColorId,
-      textColorId: textColorStillSafe ? textColorId : safeTextColors[0].id,
+      textColorId: getDefaultTextColorOption(nextBackgroundColorId).id,
     });
   };
 
@@ -433,8 +445,9 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
               backgroundColorId={backgroundColorId}
               value={textColorId}
               onChange={(nextTextColorId) => onChange({ textColorId: nextTextColorId })}
+              disabled
             />
-            <p className="cover-picker-hint cover-picker-hint--compact">白色始终可选；其他颜色按对比度提供推荐。</p>
+            <p className="cover-picker-hint cover-picker-hint--compact">文字颜色已按背景色规则自动设置，当前不可手动选择。</p>
           </div>
         )}
 
@@ -497,45 +510,18 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
           </span>
         </div>
 
-        {coverType === 'group' && !isEnglish && (
-          <div className="cover-field">
-            <span className="cover-field__label">图文方向</span>
-            <div className="cover-segmented-control cover-direction-control" role="group" aria-label="图文方向">
-              {[
-                { value: 'left-image', label: '左图右文', imageFirst: true },
-                { value: 'right-image', label: '左文右图', imageFirst: false },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`cover-segmented-control__option cover-direction-option${direction === option.value ? ' is-selected' : ''}`}
-                  aria-label={option.label}
-                  aria-pressed={direction === option.value}
-                  onClick={() => onChange({ direction: option.value as LayoutDirection })}
-                >
-                  <span className="cover-direction-option__icon" aria-hidden="true">
-                    {option.imageFirst ? <ImageIcon size={14} strokeWidth={2} /> : <TypeIcon size={14} strokeWidth={2} />}
-                    {option.imageFirst ? <TypeIcon size={14} strokeWidth={2} /> : <ImageIcon size={14} strokeWidth={2} />}
-                  </span>
-                  <span>{option.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {coverType === 'group' && (
-          <div className="cover-switch-field">
-            <div>
-              <span className="cover-field__label">存储标签</span>
-            </div>
-            <Switch
-              checked={showStorageTag}
-              label={showStorageTag ? '已开启' : '未开启'}
-              onChange={(checked) => onChange({ showStorageTag: checked })}
-            />
-          </div>
-        )}
+        <div className="cover-random-card">
+          <button
+            type="button"
+            className="cover-random-button"
+            disabled={randomDisabled || randomizing}
+            onClick={onRandomize}
+          >
+            {randomizing ? <Loader2 size={17} className="cover-spin" aria-hidden="true" /> : <Dices size={17} aria-hidden="true" />}
+            {randomizing ? '生成中…' : '随机生成'}
+          </button>
+          {randomError && <span className="cover-random-card__error" role="alert">{randomError}</span>}
+        </div>
       </section>
 
       <section className="cover-form__group cover-form__group--resources" aria-label="视觉资源">
@@ -570,7 +556,7 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
               <ResourceMenuButton
                 panel="figure"
                 preview={selectedFigure ? <img src={selectedFigure.path} alt="" /> : <span>无</span>}
-                title="人物"
+                title="角色"
                 summary={selectedFigureCategory && selectedFigure
                   ? `${selectedFigureCategory} · ${selectedFigure.name}`
                   : selectedFigure?.name ?? '未选择'}
@@ -584,11 +570,53 @@ export const CoverForm: React.FC<CoverFormProps> = ({ state, onChange }) => {
 
           {!hasFigure && coverType === 'group' && (
             <div className="cover-form__note">
-              当前标题使用特殊样式，人物选择已隐藏。
+              当前标题使用特殊样式，角色选择已隐藏。
             </div>
           )}
         </div>
       </section>
+
+      {coverType === 'group' && (
+        <section className="cover-form__group cover-form__group--settings" aria-label="封面设置">
+          {!isEnglish && (
+            <div className="cover-field">
+              <span className="cover-field__label">图文方向</span>
+              <div className="cover-segmented-control cover-direction-control" role="group" aria-label="图文方向">
+                {[
+                  { value: 'left-image', label: '左图右文', imageFirst: true },
+                  { value: 'right-image', label: '左文右图', imageFirst: false },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`cover-segmented-control__option cover-direction-option${direction === option.value ? ' is-selected' : ''}`}
+                    aria-label={option.label}
+                    aria-pressed={direction === option.value}
+                    onClick={() => onChange({ direction: option.value as LayoutDirection })}
+                  >
+                    <span className="cover-direction-option__icon" aria-hidden="true">
+                      {option.imageFirst ? <ImageIcon size={14} strokeWidth={2} /> : <TypeIcon size={14} strokeWidth={2} />}
+                      {option.imageFirst ? <TypeIcon size={14} strokeWidth={2} /> : <ImageIcon size={14} strokeWidth={2} />}
+                    </span>
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="cover-switch-field">
+            <div>
+              <span className="cover-field__label">存储标签</span>
+            </div>
+            <Switch
+              checked={showStorageTag}
+              label={showStorageTag ? '已开启' : '未开启'}
+              onChange={(checked) => onChange({ showStorageTag: checked })}
+            />
+          </div>
+        </section>
+      )}
     </div>
   );
 };

@@ -11,23 +11,20 @@ import {
 import { CoverForm, CoverTypeControl, type CoverFormState } from './components/CoverForm';
 import {
   CoverPreview,
+  loadImage,
   type CoverAssetsStatus,
   type CoverPreviewHandle,
 } from './components/CoverPreview';
 import { exportCoverImage, buildExportFilename } from './utils/exportImage';
 import { loadCoverFonts, type FontLoadStatus } from './utils/fontLoader';
-import { validateCoverTitle } from './utils/coverValidation';
+import { normalizeCoverTitle, validateCoverTitle } from './utils/coverValidation';
+import { isEnglishTitle } from './utils/layoutMatcher';
 import {
-  contrastRatio,
-  getCoverColorHex,
-  getRecommendedTextColorOption,
-  getTextColorHex,
-  getTextColorOptions,
-  TEXT_CONTRAST_THRESHOLD,
+  coverColorOptions,
+  getDefaultTextColorOption,
   type CoverColorId,
 } from './tokens/colors';
 import { groupFigureCategories, projectFigureCategories, textures } from './tokens/assets';
-import { CANVAS_SIZE } from './tokens/layouts';
 import type { CoverDraft, CoverType, ExportScale } from './types';
 import './cover-generator.css';
 
@@ -35,11 +32,6 @@ const DEFAULT_BACKGROUND: Record<CoverType, CoverColorId> = {
   project: 'orange-5',
   group: 'blue-5',
 };
-
-function getDefaultTextColor(backgroundColorId: CoverColorId): string {
-  return getTextColorOptions(backgroundColorId).find((option) => option.id === 'white')?.id
-    ?? getTextColorOptions(backgroundColorId)[0].id;
-}
 
 function createDefaultDraft(coverType: CoverType): CoverDraft {
   const backgroundColorId = DEFAULT_BACKGROUND[coverType];
@@ -51,13 +43,28 @@ function createDefaultDraft(coverType: CoverType): CoverDraft {
     direction: 'left-image',
     showStorageTag: false,
     backgroundColorId,
-    textColorId: getDefaultTextColor(backgroundColorId),
+    textColorId: getDefaultTextColorOption(backgroundColorId).id,
     textureId: textures[1]?.id ?? textures[0].id,
     figureId: figureCategories[0]?.figures[0]?.id ?? '',
   };
 }
 
 const INITIAL_STATE = createDefaultDraft('group');
+
+function trimTitleForProject(title: string): string {
+  return [...normalizeCoverTitle(title)].slice(0, 2).join('');
+}
+
+function pickRandomItem<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function isSameVisualCombination(first: CoverDraft, second: CoverDraft) {
+  return first.backgroundColorId === second.backgroundColorId
+    && first.textureId === second.textureId
+    && first.figureId === second.figureId
+    && first.direction === second.direction;
+}
 
 export const CoverGenerator: React.FC = () => {
   const [formState, setFormState] = useState<CoverFormState>(INITIAL_STATE);
@@ -69,50 +76,48 @@ export const CoverGenerator: React.FC = () => {
   const [exportScale, setExportScale] = useState<ExportScale>(1);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
+  const [randomizing, setRandomizing] = useState(false);
+  const [randomError, setRandomError] = useState('');
+  const [failedAssetPaths, setFailedAssetPaths] = useState<string[]>([]);
 
   const previewRef = useRef<CoverPreviewHandle>(null);
+  const randomRequestRef = useRef(0);
   const validation = useMemo(
     () => validateCoverTitle(formState.coverType, formState.title),
     [formState.coverType, formState.title],
   );
-  const textContrastAlert = useMemo(() => {
-    const ratio = contrastRatio(
-      getCoverColorHex(formState.backgroundColorId),
-      getTextColorHex(formState.backgroundColorId, formState.textColorId),
-    );
-
-    if (ratio >= TEXT_CONTRAST_THRESHOLD) return null;
-
-    return {
-      ratio,
-      recommendation: getRecommendedTextColorOption(formState.backgroundColorId),
-    };
-  }, [formState.backgroundColorId, formState.textColorId]);
-  const [contrastToastDismissed, setContrastToastDismissed] = useState(false);
-  const contrastToast = textContrastAlert && !contrastToastDismissed ? textContrastAlert : null;
-  const previewSize = formState.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
   const isReadyToExport = validation.isValid
     && fontStatus === 'ready'
     && assetStatus === 'ready'
     && !exporting;
 
   const handleFormChange = useCallback((partial: Partial<CoverFormState>) => {
-    setContrastToastDismissed(false);
+    randomRequestRef.current += 1;
+    setRandomizing(false);
     setFormState((current) => {
       if (partial.coverType && partial.coverType !== current.coverType) {
-        return createDefaultDraft(partial.coverType);
+        const nextDefaults = createDefaultDraft(partial.coverType);
+        return {
+          ...current,
+          coverType: partial.coverType,
+          title: current.coverType === 'group' && partial.coverType === 'project'
+            ? trimTitleForProject(current.title)
+            : current.title,
+          figureId: nextDefaults.figureId,
+          textColorId: getDefaultTextColorOption(current.backgroundColorId).id,
+        };
       }
 
       const nextState = { ...current, ...partial };
-      if (partial.backgroundColorId && !partial.textColorId) {
-        const safeTextColors = getTextColorOptions(partial.backgroundColorId);
-        if (!safeTextColors.some((option) => option.id === nextState.textColorId)) {
-          nextState.textColorId = safeTextColors[0].id;
-        }
-      }
+      nextState.textColorId = getDefaultTextColorOption(nextState.backgroundColorId).id;
       return nextState;
     });
     setExportError('');
+    setRandomError('');
+  }, []);
+
+  useEffect(() => () => {
+    randomRequestRef.current += 1;
   }, []);
 
   useEffect(() => {
@@ -134,17 +139,102 @@ export const CoverGenerator: React.FC = () => {
     };
   }, [fontRetryToken]);
 
-  useEffect(() => {
-    if (!textContrastAlert) return undefined;
-
-    const timeoutId = window.setTimeout(() => setContrastToastDismissed(true), 5200);
-    return () => window.clearTimeout(timeoutId);
-  }, [textContrastAlert]);
-
   const handleAssetsStatus = useCallback((status: CoverAssetsStatus, failedPaths: string[] = []) => {
     setAssetStatus(status);
     setFailedAssetCount(failedPaths.length);
+    setFailedAssetPaths(failedPaths);
   }, []);
+
+  const handleRandomize = useCallback(async () => {
+    if (!validation.isValid || fontStatus !== 'ready' || randomizing) return;
+
+    const requestId = randomRequestRef.current + 1;
+    randomRequestRef.current = requestId;
+    const failedPaths = new Set(failedAssetPaths);
+    let availableTextures = textures.filter((texture) => !failedPaths.has(texture.path));
+    const figureCategories = formState.coverType === 'project'
+      ? projectFigureCategories
+      : groupFigureCategories;
+    let availableFigures = figureCategories
+      .flatMap((category) => category.figures)
+      .filter((figure) => !failedPaths.has(figure.path));
+
+    if (availableTextures.length === 0 || availableFigures.length === 0) {
+      setRandomError('可用素材不足，请重试加载后再生成');
+      return;
+    }
+
+    setRandomizing(true);
+    setRandomError('');
+    const startedAt = window.performance.now();
+    let nextDraft: CoverDraft | null = null;
+
+    for (let attempt = 0; attempt < 12 && availableTextures.length > 0 && availableFigures.length > 0; attempt += 1) {
+      const texture = pickRandomItem(availableTextures);
+      const figure = pickRandomItem(availableFigures);
+      const loadResults = await Promise.allSettled([
+        loadImage(texture.path),
+        loadImage(figure.path),
+      ]);
+
+      if (loadResults[0].status === 'rejected') failedPaths.add(texture.path);
+      if (loadResults[1].status === 'rejected') failedPaths.add(figure.path);
+      if (loadResults.some((result) => result.status === 'rejected')) {
+        availableTextures = availableTextures.filter((item) => !failedPaths.has(item.path));
+        availableFigures = availableFigures.filter((item) => !failedPaths.has(item.path));
+        continue;
+      }
+
+      const background = pickRandomItem(coverColorOptions);
+      nextDraft = {
+        ...formState,
+        backgroundColorId: background.id,
+        textColorId: getDefaultTextColorOption(background.id).id,
+        textureId: texture.id,
+        figureId: figure.id,
+        direction: formState.coverType === 'group' && !isEnglishTitle(formState.title)
+          ? pickRandomItem(['left-image', 'right-image'] as const)
+          : formState.direction,
+      };
+
+      if (isSameVisualCombination(nextDraft, formState)) {
+        const currentBackgroundIndex = Math.max(
+          0,
+          coverColorOptions.findIndex((option) => option.id === formState.backgroundColorId),
+        );
+        const fallbackBackground = coverColorOptions[(currentBackgroundIndex + 1) % coverColorOptions.length];
+        nextDraft.backgroundColorId = fallbackBackground.id;
+        nextDraft.textColorId = getDefaultTextColorOption(fallbackBackground.id).id;
+      }
+      break;
+    }
+
+    const remainingDelay = Math.max(0, 260 - (window.performance.now() - startedAt));
+    if (remainingDelay > 0) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, remainingDelay));
+    }
+
+    if (requestId !== randomRequestRef.current) return;
+    setFailedAssetPaths(Array.from(failedPaths));
+    if (!nextDraft) {
+      setRandomError('可用素材不足，请重试加载后再生成');
+      setRandomizing(false);
+      return;
+    }
+
+    setFormState((current) => current.coverType === formState.coverType
+      ? {
+          ...current,
+          backgroundColorId: nextDraft.backgroundColorId,
+          textColorId: nextDraft.textColorId,
+          textureId: nextDraft.textureId,
+          figureId: nextDraft.figureId,
+          direction: nextDraft.direction,
+        }
+      : current);
+    setExportError('');
+    setRandomizing(false);
+  }, [failedAssetPaths, fontStatus, formState, randomizing, validation.isValid]);
 
   const handleExport = useCallback(async () => {
     const images = previewRef.current?.getImages();
@@ -189,6 +279,8 @@ export const CoverGenerator: React.FC = () => {
         </Link>
 
         <div className="cover-header__brand-mark" aria-hidden="true">J</div>
+        <span className="cover-header__brand-name">Jojo Labs</span>
+        <span className="cover-header__divider" aria-hidden="true" />
         <div className="cover-header__identity">
           <h1>项目封面配置器</h1>
         </div>
@@ -245,7 +337,14 @@ export const CoverGenerator: React.FC = () => {
               </div>
             )}
 
-            <CoverForm state={formState} onChange={handleFormChange} />
+            <CoverForm
+              state={formState}
+              randomizing={randomizing}
+              randomDisabled={!validation.isValid || fontStatus !== 'ready'}
+              randomError={randomError}
+              onChange={handleFormChange}
+              onRandomize={handleRandomize}
+            />
           </div>
         </aside>
 
@@ -258,12 +357,6 @@ export const CoverGenerator: React.FC = () => {
           </div>
 
           <section className="cover-preview-card" aria-label="封面预览">
-            <div className="cover-preview-card__topline">
-              <div className="cover-preview-card__label">
-                <strong>{formState.coverType === 'project' ? '项目封面' : '项目组封面'}</strong>
-              </div>
-              <span className="cover-preview-card__size">{previewSize.width} × {previewSize.height} px</span>
-            </div>
             <CoverPreview
               ref={previewRef}
               state={formState}
@@ -301,24 +394,6 @@ export const CoverGenerator: React.FC = () => {
         </main>
       </div>
 
-      {contrastToast && (
-        <div className="cover-contrast-toast" role="status" aria-live="polite">
-          <AlertCircle size={17} aria-hidden="true" />
-          <div className="cover-contrast-toast__copy">
-            <strong>文字颜色对比度不足</strong>
-            <span>
-              当前对比度 {contrastToast.ratio.toFixed(1)}:1，推荐使用{contrastToast.recommendation.label}。
-            </span>
-          </div>
-          <button
-            type="button"
-            className="cover-contrast-toast__action"
-            onClick={() => handleFormChange({ textColorId: contrastToast.recommendation.id })}
-          >
-            更换推荐字色
-          </button>
-        </div>
-      )}
     </div>
   );
 };

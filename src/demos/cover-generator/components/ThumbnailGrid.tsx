@@ -55,30 +55,6 @@ export const ThumbnailGrid: React.FC<ThumbnailGridProps> = ({
 
   const handleTabsWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const tabs = event.currentTarget;
-    const maxScrollLeft = tabs.scrollWidth - tabs.clientWidth;
-    if (maxScrollLeft <= 1) return;
-
-    const delta = Math.abs(event.deltaX) >= Math.abs(event.deltaY)
-      ? event.deltaX
-      : event.deltaY;
-    if (delta === 0) return;
-
-    const isMovingRight = delta > 0;
-    const isAtStart = tabs.scrollLeft <= 0;
-    const isAtEnd = tabs.scrollLeft >= maxScrollLeft - 1;
-
-    if (isMovingRight && isAtEnd) {
-      event.preventDefault();
-      tabs.scrollLeft = 0;
-      return;
-    }
-
-    if (!isMovingRight && isAtStart) {
-      event.preventDefault();
-      tabs.scrollLeft = maxScrollLeft;
-      return;
-    }
-
     // 普通鼠标滚轮只有 deltaY，把它转换成分类条的横向滚动。
     if (event.deltaX === 0 && event.deltaY !== 0) {
       event.preventDefault();

@@ -23,6 +23,9 @@ import type { CoverDraft } from '../types';
 export type CoverPreviewState = CoverDraft;
 export type CoverAssetsStatus = 'loading' | 'ready' | 'error';
 
+/** 预览使用 2 倍 backing store，CSS 仍按逻辑尺寸显示。 */
+const PREVIEW_RENDER_SCALE = 2;
+
 export interface CoverPreviewHandle {
   getCanvas: () => HTMLCanvasElement | null;
   getImages: () => Map<string, HTMLImageElement>;
@@ -382,10 +385,12 @@ export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
         if (!canvas) return;
 
         const canvasSize = state.coverType === 'project' ? CANVAS_SIZE.project : CANVAS_SIZE.group;
-        canvas.width = canvasSize.width;
-        canvas.height = canvasSize.height;
+        canvas.width = canvasSize.width * PREVIEW_RENDER_SCALE;
+        canvas.height = canvasSize.height * PREVIEW_RENDER_SCALE;
         const context = canvas.getContext('2d');
         if (!context) return;
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
 
         if (fontStatus === 'loading') {
           context.clearRect(0, 0, canvas.width, canvas.height);
@@ -407,7 +412,7 @@ export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
         if (cancelled) return;
 
         context.clearRect(0, 0, canvas.width, canvas.height);
-        drawCover(context, state, imagesRef.current);
+        drawCover(context, state, imagesRef.current, PREVIEW_RENDER_SCALE);
         onAssetsStatus?.(failedPaths.length > 0 ? 'error' : 'ready', failedPaths);
       };
 
@@ -423,8 +428,9 @@ export const CoverPreview = forwardRef<CoverPreviewHandle, CoverPreviewProps>(
       <div className="cover-preview-stage">
         <canvas
           ref={canvasRef}
-          width={canvasSize.width}
-          height={canvasSize.height}
+          width={canvasSize.width * PREVIEW_RENDER_SCALE}
+          height={canvasSize.height * PREVIEW_RENDER_SCALE}
+          style={{ width: `${canvasSize.width}px`, height: 'auto' }}
           className="cover-preview-canvas"
           role="img"
           aria-label="封面实时预览"

@@ -19,13 +19,13 @@ export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange }) => 
     <div className="cover-color-picker">
       <div className="cover-color-picker__summary">
         <div>
-          <strong>{selectedOption ? `${selectedOption.familyLabel} · ${selectedOption.step} 阶` : '选择背景色'}</strong>
+          <strong>{selectedOption ? `${selectedOption.familyLabel} · ${selectedOption.step} 阶` : '选择颜色'}</strong>
           <span>{selectedOption?.hex ?? '所有色阶均可直接使用'}</span>
         </div>
         <span className="cover-count-badge">{coverColorOptions.length} 色</span>
       </div>
 
-      <div className="cover-color-palette" role="listbox" aria-label="背景色">
+      <div className="cover-color-palette" role="listbox" aria-label="颜色">
         {coverColorOptions.map((option) => {
           const selected = option.id === value;
           return (
@@ -45,7 +45,7 @@ export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange }) => 
         })}
       </div>
 
-      <p className="cover-picker-hint">点击小色块直接选择背景色。</p>
+      <p className="cover-picker-hint">点击小色块直接选择颜色。</p>
     </div>
   );
 };
