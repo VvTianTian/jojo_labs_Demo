@@ -1,0 +1,7 @@
+interface:
+  display_name: "四大天王"
+  short_description: "统一调度四大天王团队完成产品、交互、研发、测试与验收任务"
+  default_prompt: "使用 $sdtw-team-controller，根据我的目标安排四大天王协作并给出下一步行动。"
+
+policy:
+  allow_implicit_invocation: true
