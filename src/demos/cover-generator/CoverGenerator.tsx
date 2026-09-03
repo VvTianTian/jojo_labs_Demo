@@ -104,12 +104,16 @@ export const CoverGenerator: React.FC = () => {
             ? trimTitleForProject(current.title)
             : current.title,
           figureId: nextDefaults.figureId,
-          textColorId: getDefaultTextColorOption(current.backgroundColorId).id,
         };
       }
 
       const nextState = { ...current, ...partial };
-      nextState.textColorId = getDefaultTextColorOption(nextState.backgroundColorId).id;
+      if (
+        partial.backgroundColorId !== undefined
+        && partial.backgroundColorId !== current.backgroundColorId
+      ) {
+        nextState.textColorId = getDefaultTextColorOption(nextState.backgroundColorId).id;
+      }
       return nextState;
     });
     setExportError('');
@@ -319,6 +323,24 @@ export const CoverGenerator: React.FC = () => {
       </header>
 
       <div className="cover-layout">
+        <div className="cover-background-ornaments" aria-hidden="true">
+          <img
+            className="cover-background-ornaments__clouds"
+            src="/cover-generator/assets/page-background/clouds.png"
+            alt=""
+          />
+          <img
+            className="cover-background-ornaments__shrubs-left"
+            src="/cover-generator/assets/page-background/shrubs-left.png"
+            alt=""
+          />
+          <img
+            className="cover-background-ornaments__shrub-right"
+            src="/cover-generator/assets/page-background/shrub-right.png"
+            alt=""
+          />
+        </div>
+
         <aside className="cover-sidebar" aria-label="封面配置">
           <div className="cover-sidebar__scroll">
             {fontStatus === 'loading' && (

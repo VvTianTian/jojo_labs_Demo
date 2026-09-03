@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import {
   coverColorOptions,
   type CoverColorId,
@@ -10,21 +10,10 @@ interface ColorPickerProps {
 }
 
 export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange }) => {
-  const selectedOption = useMemo(
-    () => coverColorOptions.find((option) => option.id === value),
-    [value],
-  );
+  const selectedOption = coverColorOptions.find((option) => option.id === value);
 
   return (
     <div className="cover-color-picker">
-      <div className="cover-color-picker__summary">
-        <div>
-          <strong>{selectedOption ? `${selectedOption.familyLabel} · ${selectedOption.step} 阶` : '选择颜色'}</strong>
-          <span>{selectedOption?.hex ?? '所有色阶均可直接使用'}</span>
-        </div>
-        <span className="cover-count-badge">{coverColorOptions.length} 色</span>
-      </div>
-
       <div className="cover-color-palette" role="listbox" aria-label="颜色">
         {coverColorOptions.map((option) => {
           const selected = option.id === value;
@@ -45,7 +34,9 @@ export const ColorPicker: React.FC<ColorPickerProps> = ({ value, onChange }) => 
         })}
       </div>
 
-      <p className="cover-picker-hint">点击小色块直接选择颜色。</p>
+      <p className="cover-picker-hint cover-picker-hint--value" aria-live="polite">
+        {selectedOption?.hex ?? '未选择'}
+      </p>
     </div>
   );
 };

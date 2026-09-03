@@ -922,48 +922,6 @@
   padding: 2px 1px 3px;
 }
 
-.cover-color-picker__summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 10px;
-  border-radius: 9px;
-  background: var(--cover-surface-subtle);
-}
-
-.cover-color-picker__summary strong,
-.cover-color-picker__summary span {
-  display: block;
-}
-
-.cover-color-picker__summary strong {
-  color: var(--cover-text);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.cover-color-picker__summary span:not(.cover-count-badge) {
-  margin-top: 2px;
-  color: var(--cover-text-tertiary);
-  font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 10px;
-}
-
-.cover-count-badge {
-  display: inline-flex !important;
-  align-items: center;
-  justify-content: center;
-  min-width: 37px;
-  height: 22px;
-  padding: 0 7px;
-  border-radius: 999px;
-  color: var(--cover-brand-dark);
-  background: var(--cover-brand-soft);
-  font-size: 10px;
-  font-weight: 700;
-}
-
 .cover-color-families {
   display: flex;
   flex-direction: column;
@@ -1053,56 +1011,10 @@
   margin-top: 8px;
 }
 
-.cover-text-color-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.cover-text-color-option {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 9px 0 6px;
-  border: 1px solid var(--cover-border);
-  border-radius: 999px;
+.cover-picker-hint--value {
   color: var(--cover-text-secondary);
-  background: #fff;
-  cursor: pointer;
-  font-size: 10px;
-  transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
-}
-
-.cover-text-color-option:hover {
-  border-color: #aab8be;
-  color: var(--cover-text);
-}
-
-.cover-text-color-option:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
-}
-
-.cover-text-color-option:disabled:hover {
-  border-color: var(--cover-border);
-  color: var(--cover-text-secondary);
-}
-
-.cover-text-color-option.is-selected {
-  border: 2px solid var(--cover-brand);
-  color: var(--cover-brand-dark);
-  background: #fff;
+  font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 700;
-}
-
-.cover-text-color-option__swatch {
-  width: 15px;
-  height: 15px;
-  border: 1px solid rgb(38 50 56 / 22%);
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 24%);
 }
 
 .cover-thumbnail-picker {
@@ -1643,6 +1555,40 @@
     linear-gradient(140deg, #e2f3ff, #eff9ff 55%, #e5f5ff);
 }
 
+.cover-background-ornaments {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cover-background-ornaments img {
+  position: absolute;
+  display: block;
+  height: auto;
+  max-width: none;
+  user-select: none;
+}
+
+.cover-background-ornaments__clouds {
+  top: -3px;
+  right: 1%;
+  width: clamp(140px, 15vw, 215px);
+}
+
+.cover-background-ornaments__shrubs-left {
+  bottom: -8px;
+  left: -55px;
+  width: clamp(230px, 21vw, 310px);
+}
+
+.cover-background-ornaments__shrub-right {
+  right: -9px;
+  bottom: -5px;
+  width: clamp(130px, 13vw, 195px);
+}
+
 .cover-sidebar {
   position: relative;
   z-index: 2;
@@ -1757,7 +1703,7 @@
   flex-direction: column;
   align-items: center;
   gap: 7px;
-  padding: 4px 4px 0;
+  padding: 4px 0 0;
   text-align: center;
 }
 
@@ -1765,8 +1711,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   gap: 8px;
-  min-width: 154px;
+  min-width: 0;
   height: 46px;
   padding: 0 20px;
   border: 0;
@@ -1865,6 +1812,13 @@
   gap: 0;
   padding: 44px 54px 30px;
   background: transparent;
+}
+
+.cover-sidebar::before,
+.cover-sidebar::after,
+.cover-workspace::before,
+.cover-workspace::after {
+  display: none;
 }
 
 .cover-workspace::before {
@@ -1998,9 +1952,24 @@
     background: linear-gradient(160deg, #e5f5ff, #f0f9ff 50%, #e8f7ff);
   }
 
-  .cover-sidebar::before,
-  .cover-sidebar::after {
-    display: none;
+  .cover-background-ornaments__clouds {
+    top: 2px;
+    right: -18px;
+    width: 130px;
+  }
+
+  .cover-background-ornaments__shrubs-left {
+    bottom: -10px;
+    left: -105px;
+    width: 240px;
+    opacity: 0.86;
+  }
+
+  .cover-background-ornaments__shrub-right {
+    right: -85px;
+    bottom: -7px;
+    width: 170px;
+    opacity: 0.86;
   }
 
   .cover-sidebar__scroll {

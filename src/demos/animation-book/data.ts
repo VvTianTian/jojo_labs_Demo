@@ -6,6 +6,7 @@ import type {
   MotionElement,
   ProductionAsset,
   ProductionRequirement,
+  PlaybackOrderItem,
   RequirementTarget,
   RequirementType,
   TextElement,
@@ -39,6 +40,7 @@ const coverTitle: TextElement = {
   color: "#353e42",
   fontWeight: "bold",
   audioUrl: null,
+  annotations: [],
 };
 
 const coverMeta: TextElement = {
@@ -54,6 +56,7 @@ const coverMeta: TextElement = {
   color: "#5d6468",
   fontWeight: "regular",
   audioUrl: null,
+  annotations: [],
 };
 
 const firstText: TextElement = {
@@ -70,6 +73,7 @@ const firstText: TextElement = {
   color: "#404040",
   fontWeight: "regular",
   audioUrl: null,
+  annotations: [],
 };
 
 const firstImage: ImageElement = {
@@ -124,6 +128,7 @@ const secondText: TextElement = {
   color: "#404040",
   fontWeight: "regular",
   audioUrl: null,
+  annotations: [],
 };
 
 const secondImage: ImageElement = {
@@ -167,6 +172,7 @@ const thirdTitle: TextElement = {
   color: "#353e42",
   fontWeight: "bold",
   audioUrl: null,
+  annotations: [],
 };
 
 const thirdText: TextElement = {
@@ -183,6 +189,7 @@ const thirdText: TextElement = {
   color: "#404040",
   fontWeight: "regular",
   audioUrl: null,
+  annotations: [],
 };
 
 const thirdImage: ImageElement = {
@@ -247,6 +254,10 @@ const createPage = (
       { kind: "element", elementId: element.id },
     ));
   const nextRequirements = [...requirements, ...visualRequirements];
+  const playbackOrder: PlaybackOrderItem[] = elements.map((element) => ({
+    elementId: element.id,
+    displayMode: "always",
+  }));
 
   return {
     id,
@@ -255,16 +266,14 @@ const createPage = (
     backgroundColor,
     elements,
     appearanceOrder: elements.map((element) => element.id),
-    playbackOrder: elements
-      .filter((element) => element.type === "text" || element.type === "bubble")
-      .map((element) => element.id),
+    playbackOrder,
     requirements: nextRequirements,
   };
 };
 
 export const initialAnimationBook: AnimationBook = {
   id: "animation-book-demo",
-  title: "北风和太阳",
+  title: "我是有用的鹅卵石",
   language: "zh",
   coverLayout: "split",
   cover: {

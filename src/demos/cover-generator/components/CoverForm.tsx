@@ -445,9 +445,10 @@ export const CoverForm: React.FC<CoverFormProps> = ({
               backgroundColorId={backgroundColorId}
               value={textColorId}
               onChange={(nextTextColorId) => onChange({ textColorId: nextTextColorId })}
-              disabled
             />
-            <p className="cover-picker-hint cover-picker-hint--compact">文字颜色已按背景色规则自动设置，当前不可手动选择。</p>
+            <p className="cover-picker-hint cover-picker-hint--compact">
+              已自动匹配清晰易读的字体颜色，可手动调整。
+            </p>
           </div>
         )}
 

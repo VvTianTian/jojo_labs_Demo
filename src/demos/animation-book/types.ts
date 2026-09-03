@@ -6,6 +6,24 @@ export type RequirementType = "image" | "motion" | "audio";
 export type RequirementStatus = "pending" | "uploaded" | "failed";
 export type BubbleDirection = "left" | "right";
 export type TextAlign = "left" | "center" | "right" | "justify";
+export type TextAnnotationType = "word" | "sentence" | "note";
+export type PronunciationMode = "pinyin" | "phonetic";
+export type PlaybackDisplayMode = "always" | "onPlayback";
+
+export interface TextAnnotation {
+  id: string;
+  type: TextAnnotationType;
+  start: number;
+  end: number;
+  text: string;
+  pronunciationMode: PronunciationMode;
+  pinyin: string;
+  translations: string[];
+  explanation: string;
+  note: string;
+  voiceRequest: string;
+  voiceSupplement: string;
+}
 
 export interface ElementBase {
   id: string;
@@ -27,6 +45,7 @@ export interface TextElement extends ElementBase {
   italic?: boolean;
   underline?: boolean;
   audioUrl: string | null;
+  annotations: TextAnnotation[];
 }
 
 export interface ImageElement extends ElementBase {
@@ -80,6 +99,11 @@ export interface ProductionRequirement {
   errorMessage?: string;
 }
 
+export interface PlaybackOrderItem {
+  elementId: string;
+  displayMode: PlaybackDisplayMode;
+}
+
 export interface AnimationBookPage {
   id: string;
   label: string;
@@ -87,7 +111,7 @@ export interface AnimationBookPage {
   backgroundColor: string;
   elements: BookElement[];
   appearanceOrder: string[];
-  playbackOrder: string[];
+  playbackOrder: PlaybackOrderItem[];
   requirements: ProductionRequirement[];
 }
 

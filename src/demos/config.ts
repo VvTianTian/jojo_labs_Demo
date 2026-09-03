@@ -1,4 +1,4 @@
-import { BookOpen, GitBranch, CheckSquare, ListChecks, Image, WandSparkles } from "lucide-react";
+import { BookOpen, GitBranch, ListChecks, Image, WandSparkles } from "lucide-react";
 
 export interface DemoConfig {
   id: string;
@@ -33,14 +33,6 @@ export const demos: DemoConfig[] = [
     path: "/flowchart",
     icon: GitBranch,
     color: "success",
-  },
-  {
-    id: "tree-checkbox",
-    name: "树形多选框",
-    description: "支持 Shift+Click 批量框选、父子联动的树形复选框",
-    path: "/tree-checkbox",
-    icon: CheckSquare,
-    color: "warning",
   },
   {
     id: "cascader-select",

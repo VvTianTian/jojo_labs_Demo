@@ -6,9 +6,7 @@ import {
   AlignLeft,
   AlignRight,
   AlertCircle,
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
   BriefcaseBusiness,
   Bold,
   Check,
@@ -22,11 +20,13 @@ import {
   FileAudio,
   FileImage,
   Film,
+  Gamepad2,
+  Hand,
   GripVertical,
+  Image as ImageIcon,
   ImagePlus,
   Layers3,
   Menu,
-  ListOrdered,
   Maximize2,
   MessageCircle,
   MousePointer2,
@@ -34,18 +34,31 @@ import {
   Pause,
   Plus,
   Play,
+  Redo2,
   Save,
   ShieldCheck,
   Trash2,
   Type,
+  Undo2,
   Underline,
   Upload,
   Italic,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { getElementLabel, initialAnimationBook } from "./data";
+import {
+  ANNOTATION_LABELS,
+  buildAnnotationSegments,
+  createAnnotation,
+  getTextSelectionRange,
+  hasAnnotationContent,
+  normalizeAnnotations,
+  selectTextRange,
+  type TextSelectionRange,
+} from "./annotation-utils";
 import { RequirementsPanel } from "./components/RequirementsPanel";
 import { RequirementRichText, RichTextPreview } from "./components/RequirementRichText";
+import { TextAnnotationPanel, type AnnotationPanelTab, type VoiceItem } from "./components/TextAnnotationPanel";
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
@@ -59,14 +72,18 @@ import {
   type MotionElement,
   type ProductionAsset,
   type ProductionRequirement,
+  type PlaybackDisplayMode,
+  type PlaybackOrderItem,
   type RequirementType,
+  type TextAnnotation,
+  type TextAnnotationType,
   type TextElement,
   type UserRole,
 } from "./types";
 import "./animation-book.css";
 
 type ViewId = "cover" | string;
-type PanelTab = "properties" | "layers" | "orders" | "requirements";
+type PanelTab = "properties" | "layers" | "requirements" | AnnotationPanelTab;
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 interface PointerDrag {
@@ -89,7 +106,18 @@ interface PendingPageDelete {
   label: string;
 }
 
+interface PendingAnnotationDelete {
+  id: string;
+  text: string;
+  type: TextAnnotationType;
+}
+
+interface PageAnnotation extends TextAnnotation {
+  elementId: string;
+}
+
 type PageDropPosition = "before" | "after";
+type PlaybackDropPosition = "before" | "after";
 
 const BASIC_INFO_MUSIC_OPTIONS = [
   { id: "cicada", title: "静静引路--Cicada", duration: "03:54" },
@@ -166,13 +194,41 @@ const readFileAsDataUrl = (file: File, onReady: (dataUrl: string) => void, onErr
   reader.readAsDataURL(file);
 };
 
-const getAudioIds = (page: AnimationBookPage) => [
-  ...page.elements
-    .filter((element) =>
-      (element.type === "text" || element.type === "bubble") && element.audioUrl,
-    )
-    .map((element) => element.id),
-];
+const getVoiceItems = (page: AnimationBookPage): VoiceItem[] => page.elements
+  .filter((element): element is TextElement | BubbleElement => element.type === "text" || element.type === "bubble")
+  .map((element) => ({
+    id: element.id,
+    type: element.type,
+    content: element.content,
+    hasAudio: Boolean(element.audioUrl),
+  }));
+
+const createPlaybackOrder = (elements: BookElement[]): PlaybackOrderItem[] => elements.map((element) => ({
+  elementId: element.id,
+  displayMode: "always",
+}));
+
+const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] => {
+  const elementsById = new Map(page.elements.map((element) => [element.id, element]));
+  const rawItems = (page.playbackOrder ?? []) as Array<PlaybackOrderItem | string>;
+  const normalized = rawItems
+    .map((item) => {
+      if (typeof item === "string") return { elementId: item, displayMode: "always" as const };
+      return {
+        elementId: item.elementId,
+        displayMode: item.displayMode === "onPlayback" ? "onPlayback" as const : "always" as const,
+      };
+    })
+    .filter((item) => elementsById.has(item.elementId));
+  const uniqueItems = normalized.filter((item, index) => normalized.findIndex((candidate) => candidate.elementId === item.elementId) === index);
+  const existingIds = new Set(uniqueItems.map((item) => item.elementId));
+  return [
+    ...uniqueItems,
+    ...page.elements
+      .filter((element) => !existingIds.has(element.id))
+      .map((element) => ({ elementId: element.id, displayMode: "always" as const })),
+  ];
+};
 
 const needsDeleteConfirmation = (element: BookElement) =>
   (element.type === "text" && element.content.trim().length > 0) ||
@@ -186,14 +242,21 @@ export function AnimationBookEditor() {
   const [viewId, setViewId] = useState<ViewId>("page-1");
   const [selectedId, setSelectedId] = useState<string | null>("page-1-text");
   const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>("page-1-image-brief");
-  const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>("page-1-text");
   const [activeRequirement, setActiveRequirement] = useState<{ id: string; mode: "editing" | "preview" } | null>(null);
-  const [panelTab, setPanelTab] = useState<PanelTab>("properties");
+  const [panelTab, setPanelTab] = useState<PanelTab>("voice");
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; position: PageDropPosition } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [pendingPageDelete, setPendingPageDelete] = useState<PendingPageDelete | null>(null);
+  const [pendingAnnotationDelete, setPendingAnnotationDelete] = useState<PendingAnnotationDelete | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [textSelection, setTextSelection] = useState<(TextSelectionRange & { elementId: string }) | null>({
+    elementId: "page-1-text",
+    start: 0,
+    end: 4,
+  });
   const [showBasicInfo, setShowBasicInfo] = useState(false);
   const [backgroundMusicChoice, setBackgroundMusicChoice] = useState("spring");
   const [backgroundMusicStyle, setBackgroundMusicStyle] = useState("安静");
@@ -204,6 +267,7 @@ export function AnimationBookEditor() {
   const currentPage = getPage(book, viewId);
   const isResearch = role === "research";
   const selectedElement = currentPage?.elements.find((element) => element.id === selectedId) ?? null;
+  const isTextToolActive = isResearch && selectedElement?.type === "text" && editingTextId === selectedElement.id;
   const sortedElements = useMemo(
     () => [...(currentPage?.elements ?? [])].sort((a, b) => a.zIndex - b.zIndex),
     [currentPage],
@@ -213,6 +277,20 @@ export function AnimationBookEditor() {
     [currentPage],
   );
   const pageIndex = book.pages.findIndex((page) => page.id === viewId);
+  const currentVoiceItems = useMemo(
+    () => getVoiceItems(currentPage),
+    [currentPage],
+  );
+  const currentPlaybackOrder = useMemo(
+    () => currentPage.kind === "page" ? normalizePlaybackOrder(currentPage) : [],
+    [currentPage],
+  );
+  const currentAnnotations = useMemo<PageAnnotation[]>(
+    () => currentPage?.elements
+      .filter((element): element is TextElement => element.type === "text")
+      .flatMap((element) => element.annotations.map((annotation) => ({ ...annotation, elementId: element.id }))) ?? [],
+    [currentPage],
+  );
 
   const notify = (message: string) => {
     setToast(message);
@@ -228,8 +306,19 @@ export function AnimationBookEditor() {
     setActiveRequirement(null);
     setPendingDelete(null);
     setPendingPageDelete(null);
+    setPendingAnnotationDelete(null);
+    setSelectedAnnotationId(null);
+    setTextSelection(null);
     setShowBasicInfo(false);
-    setPanelTab(role === "research" ? "properties" : "requirements");
+    const defaultText = nextPage?.elements.find((element): element is TextElement => element.type === "text");
+    if (role === "research" && nextPage?.kind === "page" && defaultText && defaultText.content.length > 0) {
+      setSelectedId(defaultText.id);
+      setEditingTextId(defaultText.id);
+      setTextSelection({ elementId: defaultText.id, start: 0, end: Math.min(4, defaultText.content.length) });
+      setPanelTab("voice");
+    } else {
+      setPanelTab(role === "research" ? "properties" : "requirements");
+    }
   };
 
   const selectRole = (nextRole: UserRole) => {
@@ -238,8 +327,21 @@ export function AnimationBookEditor() {
     setActiveRequirement(null);
     setPendingDelete(null);
     setPendingPageDelete(null);
+    setPendingAnnotationDelete(null);
+    setSelectedAnnotationId(null);
+    setTextSelection(null);
     setShowBasicInfo(false);
-    setPanelTab(nextRole === "research" ? "properties" : "requirements");
+    if (nextRole === "research") {
+      const defaultText = currentPage?.elements.find((element): element is TextElement => element.type === "text");
+      if (currentPage?.kind === "page" && defaultText && defaultText.content.length > 0) {
+        setSelectedId(defaultText.id);
+        setEditingTextId(defaultText.id);
+        setTextSelection({ elementId: defaultText.id, start: 0, end: Math.min(4, defaultText.content.length) });
+      }
+      setPanelTab("voice");
+    } else {
+      setPanelTab("requirements");
+    }
     if (nextRole === "production") setSelectedRequirementId(currentPage?.requirements[0]?.id ?? null);
   };
 
@@ -250,6 +352,14 @@ export function AnimationBookEditor() {
   const selectElement = (elementId: string) => {
     setSelectedId(elementId);
     setActiveRequirement(null);
+    const nextElement = currentPage?.elements.find((element) => element.id === elementId);
+    if (nextElement?.type !== "text") {
+      setTextSelection(null);
+      setSelectedAnnotationId(null);
+      if (isResearch) setPanelTab("properties");
+    } else if (isResearch) {
+      setPanelTab("voice");
+    }
   };
 
   const toggleElementRequirement = (element: BookElement) => {
@@ -295,6 +405,114 @@ export function AnimationBookEditor() {
     );
   };
 
+  const updateTextContent = (elementId: string, content: string) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (element) => {
+      if (element.type !== "text") return element;
+      return {
+        ...element,
+        content,
+        annotations: normalizeAnnotations(content, element.annotations),
+      };
+    }));
+  };
+
+  const updateAnnotation = (annotationId: string, patch: Partial<TextAnnotation>) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => ({
+      ...page,
+      elements: page.elements.map((element) => {
+        if (element.type !== "text") return element;
+        return {
+          ...element,
+          annotations: element.annotations.map((annotation) =>
+            annotation.id === annotationId ? { ...annotation, ...patch } : annotation,
+          ),
+        };
+      }),
+    }));
+  };
+
+  const handleTextSelection = (elementId: string, selectionRange: TextSelectionRange | null) => {
+    if (!isResearch) return;
+    if (!selectionRange || selectionRange.start === selectionRange.end) {
+      setTextSelection(null);
+      return;
+    }
+    setSelectedId(elementId);
+    setEditingTextId(elementId);
+    setTextSelection({ elementId, ...selectionRange });
+    setPanelTab("voice");
+  };
+
+  const addTextAnnotation = (type: TextAnnotationType) => {
+    if (!isResearch || !textSelection) return;
+    const element = currentPage?.elements.find((candidate) => candidate.id === textSelection.elementId);
+    if (!element || element.type !== "text") return;
+    const annotation = createAnnotation(
+      createId(`annotation-${type}`),
+      type,
+      textSelection,
+      element.content,
+    );
+    modifyCurrentPage((page) => replaceElement(page, element.id, (candidate) => {
+      if (candidate.type !== "text") return candidate;
+      return { ...candidate, annotations: [...candidate.annotations, annotation] };
+    }));
+    setSelectedAnnotationId(annotation.id);
+    setPanelTab(type);
+    setEditingTextId(null);
+    setTextSelection(null);
+    notify(`已添加${ANNOTATION_LABELS[type]}`);
+  };
+
+  const selectAnnotation = (annotationId: string) => {
+    const annotation = currentAnnotations.find((candidate) => candidate.id === annotationId);
+    if (!annotation) return;
+    setSelectedAnnotationId(annotation.id);
+    setSelectedId(annotation.elementId);
+    setPanelTab(annotation.type);
+  };
+
+  const selectAnnotationTab = (tab: AnnotationPanelTab) => {
+    setPanelTab(tab);
+    if (tab === "voice" || tab === "standard" || tab === "playback") return;
+    const firstAnnotation = currentAnnotations.find((annotation) => annotation.type === tab);
+    setSelectedAnnotationId(firstAnnotation?.id ?? null);
+  };
+
+  const removeAnnotation = (annotationId: string) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => ({
+      ...page,
+      elements: page.elements.map((element) => element.type === "text"
+        ? { ...element, annotations: element.annotations.filter((annotation) => annotation.id !== annotationId) }
+        : element),
+    }));
+    setPendingAnnotationDelete(null);
+    if (selectedAnnotationId === annotationId) {
+      setSelectedAnnotationId(null);
+      setPanelTab("voice");
+    }
+    notify("标注已删除");
+  };
+
+  const requestRemoveAnnotation = (annotationId: string) => {
+    if (!isResearch) return;
+    const annotation = currentAnnotations.find((candidate) => candidate.id === annotationId);
+    if (!annotation) return;
+    if (hasAnnotationContent(annotation)) {
+      setPendingAnnotationDelete({ id: annotation.id, text: annotation.text, type: annotation.type });
+      return;
+    }
+    removeAnnotation(annotationId);
+  };
+
+  const quickFillAnnotationVoice = (annotationId: string) => {
+    const annotation = currentAnnotations.find((candidate) => candidate.id === annotationId);
+    if (annotation) updateAnnotation(annotationId, { voiceRequest: annotation.text });
+  };
+
   const updateElementGeometry = (elementId: string, patch: Pick<BookElement, "x" | "y" | "width" | "height"> | Partial<Pick<BubbleElement, "direction" | "tailX" | "tailY">>) => {
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
     if (!element || (!isResearch && !["image", "motion", "bubble"].includes(element.type))) return;
@@ -319,15 +537,20 @@ export function AnimationBookEditor() {
       requirements: visualRequirement
         ? [...page.requirements, visualRequirement]
         : page.requirements,
-      ...(element.type === "text" || element.type === "bubble"
-        ? { playbackOrder: [...page.playbackOrder, element.id] }
-        : {}),
+      playbackOrder: page.kind === "page"
+        ? [...normalizePlaybackOrder(page), {
+            elementId: element.id,
+            displayMode: "always" as const,
+          }]
+        : page.playbackOrder,
     }));
     setSelectedId(element.id);
     setEditingTextId(element.type === "bubble" ? element.id : null);
     setActiveRequirement(visualRequirement ? { id: visualRequirement.id, mode: "editing" } : null);
     if (visualRequirement) setSelectedRequirementId(visualRequirement.id);
-    setPanelTab("properties");
+    setSelectedAnnotationId(null);
+    setTextSelection(null);
+    setPanelTab(element.type === "text" || element.type === "bubble" ? "voice" : "properties");
   };
 
   const addText = () => {
@@ -344,6 +567,7 @@ export function AnimationBookEditor() {
       color: "#404040",
       fontWeight: "regular",
       audioUrl: null,
+      annotations: [],
     });
   };
 
@@ -519,7 +743,7 @@ export function AnimationBookEditor() {
       ...page,
       elements: page.elements.filter((element) => element.id !== elementId),
       appearanceOrder: page.appearanceOrder.filter((id) => id !== elementId),
-      playbackOrder: page.playbackOrder.filter((id) => id !== elementId),
+      playbackOrder: normalizePlaybackOrder(page).filter((item) => item.elementId !== elementId),
       requirements: page.requirements.filter(
         (requirement) => requirement.target?.kind !== "element" || requirement.target.elementId !== elementId,
       ),
@@ -527,6 +751,8 @@ export function AnimationBookEditor() {
     setSelectedId(null);
     setEditingTextId(null);
     setActiveRequirement(null);
+    setSelectedAnnotationId(null);
+    setTextSelection(null);
     setPendingDelete(null);
   };
 
@@ -571,6 +797,7 @@ export function AnimationBookEditor() {
           color: "#404040",
           fontWeight: "regular",
           audioUrl: null,
+          annotations: [],
         },
       ],
       appearanceOrder: [],
@@ -578,6 +805,7 @@ export function AnimationBookEditor() {
       requirements: [],
     };
     newPage.appearanceOrder = newPage.elements.map((element) => element.id);
+    newPage.playbackOrder = createPlaybackOrder(newPage.elements);
     setBook((previous) => ({ ...previous, pages: [...previous.pages, newPage] }));
     setViewId(id);
     setSelectedId(newPage.elements[0].id);
@@ -608,6 +836,8 @@ export function AnimationBookEditor() {
       setSelectedRequirementId(nextPage?.requirements[0]?.id ?? null);
       setActiveRequirement(null);
       setEditingTextId(null);
+      setSelectedAnnotationId(null);
+      setTextSelection(null);
     }
     setPendingPageDelete(null);
     notify("页面已删除");
@@ -792,15 +1022,40 @@ export function AnimationBookEditor() {
     });
   };
 
-  const moveOrderItem = (order: "appearanceOrder" | "playbackOrder", id: string, direction: -1 | 1) => {
+  const updatePlaybackDisplayMode = (elementId: string, displayMode: PlaybackDisplayMode) => {
     if (!isResearch) return;
     modifyCurrentPage((page) => {
-      const items = [...page[order]];
-      const index = items.indexOf(id);
+      const items = normalizePlaybackOrder(page);
+      const index = items.findIndex((item) => item.elementId === elementId);
+      if (index < 0 || items[index].displayMode === displayMode) return page;
+      items[index] = { ...items[index], displayMode };
+      return { ...page, playbackOrder: items };
+    });
+  };
+
+  const movePlaybackOrderItem = (elementId: string, direction: -1 | 1) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => {
+      const items = normalizePlaybackOrder(page);
+      const index = items.findIndex((item) => item.elementId === elementId);
       const nextIndex = index + direction;
       if (index < 0 || nextIndex < 0 || nextIndex >= items.length) return page;
       [items[index], items[nextIndex]] = [items[nextIndex], items[index]];
-      return { ...page, [order]: items };
+      return { ...page, playbackOrder: items };
+    });
+  };
+
+  const reorderPlaybackOrder = (elementId: string, targetElementId: string, position: PlaybackDropPosition) => {
+    if (!isResearch || elementId === targetElementId) return;
+    modifyCurrentPage((page) => {
+      const items = normalizePlaybackOrder(page);
+      const sourceIndex = items.findIndex((item) => item.elementId === elementId);
+      const targetIndex = items.findIndex((item) => item.elementId === targetElementId);
+      if (sourceIndex < 0 || targetIndex < 0) return page;
+      const [moved] = items.splice(sourceIndex, 1);
+      const insertionIndex = items.findIndex((item) => item.elementId === targetElementId) + (position === "after" ? 1 : 0);
+      items.splice(Math.max(0, insertionIndex), 0, moved);
+      return { ...page, playbackOrder: items };
     });
   };
 
@@ -812,6 +1067,8 @@ export function AnimationBookEditor() {
         setShowBasicInfo(false);
       } else if (pendingPageDelete) {
         setPendingPageDelete(null);
+      } else if (pendingAnnotationDelete) {
+        setPendingAnnotationDelete(null);
       } else if (pendingDelete) {
         setPendingDelete(null);
       } else if (activeRequirement) {
@@ -829,7 +1086,9 @@ export function AnimationBookEditor() {
     }
   };
 
-  const currentAudioCount = getAudioIds(currentPage).length;
+  const isContextPanel = isResearch && (
+    panelTab === "voice" || panelTab === "word" || panelTab === "sentence" || panelTab === "note" || panelTab === "standard" || panelTab === "playback"
+  );
 
   return (
     <div className="animation-book-editor" onKeyDown={handleKeyDown}>
@@ -844,12 +1103,10 @@ export function AnimationBookEditor() {
 
       <header className="ab-project-header">
         <div className="ab-project-summary">
-          <div className="ab-project-tags">
+          <div className="ab-project-primary-row">
             <span className="ab-tag ab-tag--blue">进行中</span>
             <span className="ab-tag ab-tag--blue">生产中</span>
-            <span className="ab-tag ab-tag--muted">AB_2026</span>
-          </div>
-          <div className="ab-project-title-row">
+            <span className="ab-tag ab-tag--muted">LS_105189</span>
             <input
               aria-label="动画书名称"
               value={book.title}
@@ -857,15 +1114,14 @@ export function AnimationBookEditor() {
               onChange={(event) => { if (isResearch) setBook((previous) => ({ ...previous, title: event.target.value })); }}
               className="ab-project-title-input"
             />
-            <span className="ab-project-divider" />
-            <span className="ab-project-note">动画书生产工具</span>
-            <span className="ab-tag ab-tag--muted">{book.language === "zh" ? "中文" : "English"}</span>
+            <span className="ab-project-note">我是课时备注 - 读一读 - 动画书</span>
+            <span className="ab-tag ab-tag--muted">阅读5阶</span>
             <button className="ab-text-button" type="button" onClick={() => notify("更多信息将在后续版本开放")}>更多</button>
           </div>
           <div className="ab-project-meta-row">
-            <span className="ab-meta-label">职能</span><span className="ab-meta-value">{isResearch ? "教研人员" : "制作人员"}</span>
-            <span className="ab-meta-label">执行人</span><span className="ab-meta-value">内容团队</span>
-            <span className="ab-meta-label">生产日期</span><span className="ab-meta-value">2026.08.24</span>
+            <span className="ab-meta-label">职能</span><span className="ab-meta-value">{isResearch ? "教研" : "制作人员"}</span>
+            <span className="ab-meta-label">执行人</span><span className="ab-meta-value">王宝强；吴彦祖</span>
+            <span className="ab-meta-label">生产日期</span><span className="ab-meta-value">2025.10.01–2025.10.15</span>
           </div>
         </div>
         <div className="ab-project-actions">
@@ -949,43 +1205,58 @@ export function AnimationBookEditor() {
             />
           ) : (
             <>
-          <div className="ab-stage-scroll">
-            <div className="ab-canvas-zone">
-              <div className="ab-canvas-grid-toggle" aria-label="动画书网格系统">
-                <span>动画书网格系统</span>
-                <button
-                  type="button"
-                  className={`ab-switch${showSafeArea ? " is-on" : ""}`}
-                  role="switch"
-                  aria-checked={showSafeArea}
-                  aria-label={showSafeArea ? "隐藏动画书网格系统" : "显示动画书网格系统"}
-                  onClick={() => setShowSafeArea((visible) => !visible)}
-                >
-                  <span className="ab-switch-thumb" />
-                </button>
-              </div>
-              <div className="ab-floating-tools" aria-label={isResearch ? "添加页面元素" : "制作工具"}>
-                <ToolButton icon={<MousePointer2 size={15} />} label="选择" active />
-                {isResearch ? (
-                  <>
-                    <span className="ab-tool-divider" />
-                    <ToolButton icon={<Type size={15} />} label="添加文本" onClick={addText} />
-                    <ToolButton icon={<ImagePlus size={15} />} label="添加图片占位" onClick={addImagePlaceholder} />
-                    <ToolButton icon={<Film size={15} />} label="添加动效占位" onClick={addMotion} />
-                    <ToolButton icon={<MessageCircle size={15} />} label="添加对话气泡" onClick={addBubble} />
-                    <span className="ab-tool-divider" />
-                    <ToolButton icon={<Layers3 size={15} />} label="图层顺序" onClick={() => setPanelTab("layers")} />
-                    <ToolButton icon={<ListOrdered size={15} />} label="出现与播放顺序" onClick={() => setPanelTab("orders")} />
-                  </>
-                ) : (
-                  <>
-                    <span className="ab-tool-divider" />
-                    <ToolButton icon={<ClipboardList size={15} />} label="查看制作需求" active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} />
-                  </>
-                )}
-              </div>
+              <div className="ab-stage-scroll">
+                <div className="ab-canvas-zone">
+                  <div className="ab-editor-sticky-toolbar">
+                    <div className="ab-editor-toolbar" aria-label={isResearch ? "编辑画布工具" : "制作工具"}>
+                      {isResearch && (
+                        <div className="ab-editor-toolbar-group ab-editor-history" aria-label="编辑历史">
+                          <ToolButton icon={<Undo2 size={18} />} label="撤销" displayLabel="撤销" disabled />
+                          <ToolButton icon={<Redo2 size={18} />} label="重做" displayLabel="重做" disabled />
+                        </div>
+                      )}
+                      {isResearch && <span className="ab-tool-divider" />}
+                      <div className="ab-editor-toolbar-group">
+                        <ToolButton icon={<MousePointer2 size={18} />} label="选择" displayLabel="选择" active={!isTextToolActive} />
+                        {isResearch ? (
+                          <>
+                            <ToolButton icon={<Type size={18} />} label="添加文本" displayLabel="文字" active={isTextToolActive} onClick={addText} />
+                            <ToolButton icon={<ImageIcon size={18} />} label="添加图片占位" displayLabel="图片" onClick={addImagePlaceholder} />
+                            <ToolButton icon={<Film size={18} />} label="添加动效占位" displayLabel="动效" onClick={addMotion} />
+                            <ToolButton icon={<MessageCircle size={18} />} label="添加对话气泡" displayLabel="对话" onClick={addBubble} />
+                            <span className="ab-tool-divider" />
+                            <ToolButton icon={<Gamepad2 size={18} />} label="标准互动（暂未开放）" displayLabel="题" disabled />
+                            <ToolButton icon={<Hand size={18} />} label="互动（暂未开放）" displayLabel="互动" disabled />
+                          </>
+                        ) : (
+                          <>
+                            <span className="ab-tool-divider" />
+                            <ToolButton icon={<ClipboardList size={18} />} label="查看制作需求" displayLabel="制作需求" active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} />
+                          </>
+                        )}
+                      </div>
+                      {isResearch && (
+                        <div className="ab-editor-toolbar-settings">
+                          <span className="ab-editor-zoom" aria-label="缩放比例">50%<ChevronDown size={14} aria-hidden="true" /></span>
+                        </div>
+                      )}
+                      <div className="ab-canvas-grid-toggle ab-editor-toolbar-grid" aria-label="动画书网格系统">
+                        <span>网格系统</span>
+                        <button
+                          type="button"
+                          className={`ab-switch${showSafeArea ? " is-on" : ""}`}
+                          role="switch"
+                          aria-checked={showSafeArea}
+                          aria-label={showSafeArea ? "隐藏动画书网格系统" : "显示动画书网格系统"}
+                          onClick={() => setShowSafeArea((visible) => !visible)}
+                        >
+                          <span className="ab-switch-thumb" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
 
-              <div className="ab-canvas-shadow">
+                  <div className="ab-canvas-shadow">
                 <div
                   ref={canvasRef}
                   className={`ab-canvas ab-canvas--${currentPage?.kind ?? "page"}`}
@@ -994,6 +1265,8 @@ export function AnimationBookEditor() {
                     setSelectedId(null);
                     setActiveRequirement(null);
                     setEditingTextId(null);
+                    setTextSelection(null);
+                    setSelectedAnnotationId(null);
                   }}
                   onPointerMove={handleCanvasPointerMove}
                   onPointerUp={endPointerDrag}
@@ -1026,11 +1299,18 @@ export function AnimationBookEditor() {
                           if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
                         }}
                         onSelect={() => selectElement(element.id)}
+                        textSelection={textSelection?.elementId === element.id ? textSelection : undefined}
+                        annotations={isResearch && element.type === "text" ? element.annotations : []}
+                        onTextSelectionChange={(range) => handleTextSelection(element.id, range)}
+                        onRequestDeleteAnnotation={isResearch ? requestRemoveAnnotation : undefined}
                         onBeginTextEdit={() => {
                           selectElement(element.id);
                           if (element.type === "text" || element.type === "bubble") setEditingTextId(element.id);
                         }}
-                        onTextChange={(content) => updateElementById(element.id, { content })}
+                        onTextChange={(content) => {
+                          if (element.type === "text") updateTextContent(element.id, content);
+                          else updateElementById(element.id, { content });
+                        }}
                         onEndTextEdit={() => setEditingTextId(null)}
                         onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
                       />
@@ -1040,73 +1320,96 @@ export function AnimationBookEditor() {
                     <TextFormatToolbar
                       element={selectedElement}
                       onUpdate={(patch) => updateElementById(selectedElement.id, patch)}
-                      onMark={() => notify("文本标记能力已预留")}
+                      onMark={addTextAnnotation}
                     />
+                  )}
+                  {isResearch && (
+                    <button
+                      type="button"
+                      className="ab-canvas-layer-trigger"
+                      aria-label="打开图层顺序"
+                      title="图层顺序"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPanelTab("layers");
+                      }}
+                    >
+                      <Layers3 size={14} aria-hidden="true" />
+                    </button>
                   )}
                   {currentPage?.kind === "page" && (
                     <div className="ab-canvas-page-number">{pageIndex + 1}/{book.pages.length}</div>
                   )}
                   <div className="ab-canvas-grid-label" aria-hidden="true">640 × 360</div>
                 </div>
-              </div>
-              <div className="ab-canvas-footnote">
-                <span><PanelLeft size={13} /> 生产态编辑区</span>
-              </div>
-            </div>
+                  </div>
+                  <div className="ab-canvas-footnote">
+                    <span><PanelLeft size={13} /> 生产态编辑区</span>
+                  </div>
+                </div>
 
-            <div className="ab-editor-panel">
-              <div className="ab-panel-tabs" role="tablist" aria-label="编辑设置">
-                {isResearch && <>
-                  <PanelTabButton active={panelTab === "properties"} onClick={() => setPanelTab("properties")} label="页面内容" count={currentPage?.elements.length} />
-                  <PanelTabButton active={panelTab === "layers"} onClick={() => setPanelTab("layers")} label="图层顺序" count={currentPage?.elements.length} />
-                  <PanelTabButton active={panelTab === "orders"} onClick={() => setPanelTab("orders")} label="出现 / 播放顺序" count={currentAudioCount} />
-                </>}
-                {!isResearch && <PanelTabButton active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} label="制作需求" count={currentPage?.requirements.length} />}
-              </div>
+                <div className="ab-editor-panel">
+              {isContextPanel ? (
+                <TextAnnotationPanel
+                  activeTab={panelTab}
+                  annotations={currentAnnotations}
+                  selectedAnnotationId={selectedAnnotationId}
+                  standardInteractionCount={1}
+                  voiceItems={currentVoiceItems}
+                  elements={currentPage.elements}
+                  playbackOrder={currentPlaybackOrder}
+                  onChangeTab={selectAnnotationTab}
+                  onUpdatePlaybackDisplayMode={updatePlaybackDisplayMode}
+                  onMovePlaybackOrder={movePlaybackOrderItem}
+                  onReorderPlaybackOrder={reorderPlaybackOrder}
+                  onSelectAnnotation={selectAnnotation}
+                  onUpdateAnnotation={updateAnnotation}
+                  onQuickFill={quickFillAnnotationVoice}
+                />
+              ) : (
+                <>
+                  {!isResearch && <div className="ab-panel-tabs" role="tablist" aria-label="编辑设置">
+                    <PanelTabButton active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} label="制作需求" count={currentPage?.requirements.length} />
+                  </div>}
 
-              {panelTab === "properties" && (
-                <PropertiesPanel
-                  page={currentPage}
-                  selectedId={selectedId}
-                  onSelectElement={selectElement}
-                  coverLayout={book.coverLayout}
-                  onCoverLayoutChange={(coverLayout) => { if (isResearch) setBook((previous) => ({ ...previous, coverLayout })); }}
-                  onUpdateElement={updateElementById}
-                  onRemoveElement={requestRemoveElement}
-                  onRequestAudioUpload={requestAudioUpload}
-                />
+                  {panelTab === "properties" && (
+                    <PropertiesPanel
+                      page={currentPage}
+                      selectedId={selectedId}
+                      onSelectElement={selectElement}
+                      coverLayout={book.coverLayout}
+                      onCoverLayoutChange={(coverLayout) => { if (isResearch) setBook((previous) => ({ ...previous, coverLayout })); }}
+                      onUpdateElement={updateElementById}
+                      onRemoveElement={requestRemoveElement}
+                      onRequestAudioUpload={requestAudioUpload}
+                    />
+                  )}
+                  {panelTab === "layers" && (
+                    <LayersPanel
+                      elements={layerElements}
+                      selectedId={selectedId}
+                      onSelect={selectElement}
+                      onMove={moveLayer}
+                    />
+                  )}
+                  {!isResearch && panelTab === "requirements" && (
+                    <RequirementsPanel
+                      page={currentPage}
+                      role={role}
+                      selectedId={selectedRequirementId}
+                      onSelectRequirement={setSelectedRequirementId}
+                      onAddRequirement={addRequirement}
+                      onUpdateRequirement={updateRequirement}
+                      onDeleteRequirement={deleteRequirement}
+                      onUploadFile={handleRequirementUpload}
+                      getElement={(id) => currentPage?.elements.find((element) => element.id === id)}
+                    />
+                  )}
+                </>
               )}
-              {panelTab === "layers" && (
-                <LayersPanel
-                  elements={layerElements}
-                  selectedId={selectedId}
-                  onSelect={selectElement}
-                  onMove={moveLayer}
-                />
-              )}
-              {panelTab === "orders" && (
-                <OrdersPanel
-                  page={currentPage}
-                  onMove={moveOrderItem}
-                  getElement={ (id) => currentPage?.elements.find((element) => element.id === id) }
-                />
-              )}
-              {!isResearch && panelTab === "requirements" && (
-                <RequirementsPanel
-                  page={currentPage}
-                  role={role}
-                  selectedId={selectedRequirementId}
-                  onSelectRequirement={setSelectedRequirementId}
-                  onAddRequirement={addRequirement}
-                  onUpdateRequirement={updateRequirement}
-                  onDeleteRequirement={deleteRequirement}
-                  onUploadFile={handleRequirementUpload}
-                  getElement={(id) => currentPage?.elements.find((element) => element.id === id)}
-                />
-              )}
-            </div>
-          </div>
-          </>
+                </div>
+              </div>
+            </>
           )}
         </section>
       </main>
@@ -1138,6 +1441,21 @@ export function AnimationBookEditor() {
             <div className="ab-confirm-actions">
               <button type="button" className="ab-secondary-button" autoFocus onClick={() => setPendingDelete(null)}>取消</button>
               <button type="button" className="ab-primary-button ab-primary-button--danger" onClick={confirmRemoveElement}>确认删除</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingAnnotationDelete && (
+        <div className="ab-confirm-backdrop" role="presentation" onClick={() => setPendingAnnotationDelete(null)}>
+          <div className="ab-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="ab-annotation-delete-title" onClick={(event) => event.stopPropagation()}>
+            <div className="ab-confirm-icon"><AlertCircle size={18} /></div>
+            <div className="ab-confirm-copy">
+              <h2 id="ab-annotation-delete-title">确认删除{ANNOTATION_LABELS[pendingAnnotationDelete.type]}？</h2>
+              <p>“{pendingAnnotationDelete.text}”已有配置内容，删除后只移除标注，不会删除原文。</p>
+            </div>
+            <div className="ab-confirm-actions">
+              <button type="button" className="ab-secondary-button" autoFocus onClick={() => setPendingAnnotationDelete(null)}>取消</button>
+              <button type="button" className="ab-primary-button ab-primary-button--danger" onClick={() => removeAnnotation(pendingAnnotationDelete.id)}>确认删除</button>
             </div>
           </div>
         </div>
@@ -1222,17 +1540,22 @@ function BasicInfoPanel({
 function ToolButton({
   icon,
   label,
+  displayLabel = label,
   onClick,
   active = false,
+  disabled = false,
 }: {
   icon: React.ReactNode;
   label: string;
+  displayLabel?: string;
   onClick?: () => void;
   active?: boolean;
+  disabled?: boolean;
 }) {
   return (
-    <button type="button" className={`ab-tool-button${active ? " is-active" : ""}`} onClick={onClick} aria-label={label} title={label}>
-      {icon}
+    <button type="button" className={`ab-tool-button${active ? " is-active" : ""}${disabled ? " is-disabled" : ""}`} onClick={onClick} aria-label={label} title={label} disabled={disabled}>
+      <span className="ab-tool-icon" aria-hidden="true">{icon}</span>
+      <span className="ab-tool-label">{displayLabel}</span>
     </button>
   );
 }
@@ -1464,7 +1787,11 @@ function CanvasElement({
   requirement,
   requirementMode,
   requirementOpen,
+  annotations,
+  textSelection,
   onSelect,
+  onTextSelectionChange,
+  onRequestDeleteAnnotation,
   onBeginTextEdit,
   onTextChange,
   onEndTextEdit,
@@ -1481,7 +1808,11 @@ function CanvasElement({
   requirement?: ProductionRequirement;
   requirementMode?: "editing" | "preview";
   requirementOpen: boolean;
+  annotations?: TextAnnotation[];
+  textSelection?: TextSelectionRange;
   onSelect: () => void;
+  onTextSelectionChange?: (range: TextSelectionRange | null) => void;
+  onRequestDeleteAnnotation?: (annotationId: string) => void;
   onBeginTextEdit: () => void;
   onTextChange: (content: string) => void;
   onEndTextEdit: () => void;
@@ -1496,6 +1827,10 @@ function CanvasElement({
   useEffect(() => {
     if (!editing || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
     textContentRef.current.focus();
+    if (element.type === "text" && textSelection) {
+      selectTextRange(textContentRef.current, textSelection);
+      return;
+    }
     const selection = window.getSelection();
     if (!selection) return;
     const range = document.createRange();
@@ -1503,7 +1838,7 @@ function CanvasElement({
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
-  }, [editing, element.type]);
+  }, [editing, element.type, textSelection]);
 
   const positionStyle = {
     left: `${(element.x / CANVAS_WIDTH) * 100}%`,
@@ -1526,6 +1861,12 @@ function CanvasElement({
       if (isComposingRef.current || nativeEvent.isComposing) return;
       onTextChange(event.currentTarget.textContent ?? "");
     },
+    onMouseUp: () => {
+      if (textContentRef.current) onTextSelectionChange?.(getTextSelectionRange(textContentRef.current));
+    },
+    onKeyUp: () => {
+      if (textContentRef.current) onTextSelectionChange?.(getTextSelectionRange(textContentRef.current));
+    },
     onBlur: onEndTextEdit,
     onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
       event.stopPropagation();
@@ -1535,6 +1876,14 @@ function CanvasElement({
       }
     },
   };
+  const textStyle = element.type === "text" ? {
+    fontSize: `${element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)}px`,
+    color: element.color,
+    fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
+    fontStyle: element.italic ? "italic" : "normal",
+    textDecoration: element.underline ? "underline" : "none",
+    textAlign: element.textAlign ?? "left",
+  } as const : undefined;
   const baseProps = {
     className: `ab-canvas-element ab-canvas-element--${element.type}${selected ? " is-selected" : ""}`,
     style: positionStyle,
@@ -1561,20 +1910,17 @@ function CanvasElement({
   return (
     <div {...baseProps}>
       {element.type === "text" && (
-        <div
-          {...editableContentProps}
-          className="ab-canvas-text-content"
-          style={{
-            fontSize: `${element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)}px`,
-            color: element.color,
-            fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
-            fontStyle: element.italic ? "italic" : "normal",
-            textDecoration: element.underline ? "underline" : "none",
-            textAlign: element.textAlign ?? "left",
-          }}
-        >
-          {element.content}
-        </div>
+        editing ? (
+          <div {...editableContentProps} className="ab-canvas-text-content" style={textStyle}>
+            {element.content}
+          </div>
+        ) : (
+          <AnnotatedTextContent
+            element={element}
+            annotations={annotations ?? element.annotations}
+            onRequestDelete={onRequestDeleteAnnotation}
+          />
+        )
       )}
       {element.type === "image" && (
         <>
@@ -1646,6 +1992,77 @@ function CanvasElement({
   );
 }
 
+function AnnotatedTextContent({
+  element,
+  annotations,
+  onRequestDelete,
+}: {
+  element: TextElement;
+  annotations: TextAnnotation[];
+  onRequestDelete?: (annotationId: string) => void;
+}) {
+  const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
+  const segments = buildAnnotationSegments(element.content, annotations);
+  const style = {
+    fontSize: `${element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)}px`,
+    color: element.color,
+    fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
+    fontStyle: element.italic ? "italic" : "normal",
+    textDecoration: element.underline ? "underline" : "none",
+    textAlign: element.textAlign ?? "left",
+  } as const;
+
+  return (
+    <div className="ab-canvas-text-content ab-canvas-text-rendered" style={style}>
+      {segments.map((segment) => {
+        let decorated: React.ReactNode = segment.text;
+        if (segment.annotations.some((annotation) => annotation.type === "note")) {
+          decorated = <span className="ab-annotation-decoration ab-annotation-decoration--note">{decorated}</span>;
+        }
+        if (segment.annotations.some((annotation) => annotation.type === "sentence")) {
+          decorated = <span className="ab-annotation-decoration ab-annotation-decoration--sentence">{decorated}</span>;
+        }
+        if (segment.annotations.some((annotation) => annotation.type === "word")) {
+          decorated = <span className="ab-annotation-decoration ab-annotation-decoration--word">{decorated}</span>;
+        }
+        const controls = segment.annotations.filter((annotation) => annotation.start === segment.start);
+        const hoveredControl = segment.annotations.find((annotation) => annotation.id === hoveredAnnotationId);
+        const visibleControls = controls.length > 0 ? controls : hoveredControl ? [hoveredControl] : [];
+        return (
+          <span
+            key={`${segment.start}-${segment.end}`}
+            className="ab-annotation-segment"
+            onMouseEnter={() => setHoveredAnnotationId(controls[0]?.id ?? segment.annotations[0]?.id ?? null)}
+            onMouseLeave={() => setHoveredAnnotationId(null)}
+          >
+            {decorated}
+            {hoveredAnnotationId && segment.annotations.some((annotation) => annotation.id === hoveredAnnotationId) && visibleControls.length > 0 && (
+              <span className="ab-annotation-delete-list">
+                {visibleControls.map((annotation) => (
+                  <button
+                    type="button"
+                    key={annotation.id}
+                    className="ab-annotation-delete-button"
+                    aria-label={`删除${annotation.text}${annotation.type === "word" ? "好词" : annotation.type === "sentence" ? "好句" : "注释"}`}
+                    title="删除标注"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRequestDelete?.(annotation.id);
+                    }}
+                  >
+                    <Trash2 size={11} aria-hidden="true" />
+                  </button>
+                ))}
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function CanvasRequirement({
   elementType,
   requirement,
@@ -1713,12 +2130,12 @@ function TextFormatToolbar({
 }: {
   element: TextElement;
   onUpdate: (patch: Partial<TextElement>) => void;
-  onMark: () => void;
+  onMark: (type: TextAnnotationType) => void;
 }) {
   const leftPercent = (element.x / CANVAS_WIDTH) * 100;
   const positionStyle = {
     left: `clamp(2%, ${leftPercent}%, calc(100% - min(560px, calc(100vw - 32px))))`,
-    top: `${Math.max(3, (element.y / CANVAS_HEIGHT) * 100 - 16)}%`,
+    top: `${Math.max(8, (element.y / CANVAS_HEIGHT) * 100 - 16)}%`,
   };
 
   return (
@@ -1741,9 +2158,9 @@ function TextFormatToolbar({
       <button type="button" className={`ab-format-button${element.textAlign === "right" ? " is-active" : ""}`} aria-label="右对齐" title="右对齐" onClick={() => onUpdate({ textAlign: "right" })}><AlignRight size={16} /></button>
       <button type="button" className={`ab-format-button${element.textAlign === "justify" ? " is-active" : ""}`} aria-label="两端对齐" title="两端对齐" onClick={() => onUpdate({ textAlign: "justify" })}><AlignJustify size={16} /></button>
       <span className="ab-format-divider" />
-      <button type="button" className="ab-format-text-button" onClick={onMark}>+好词</button>
-      <button type="button" className="ab-format-text-button" onClick={onMark}>+好句</button>
-      <button type="button" className="ab-format-text-button" onClick={onMark}>+注释</button>
+      <button type="button" className="ab-format-text-button" onMouseDown={(event) => event.preventDefault()} onClick={() => onMark("word")}>+好词</button>
+      <button type="button" className="ab-format-text-button" onMouseDown={(event) => event.preventDefault()} onClick={() => onMark("sentence")}>+好句</button>
+      <button type="button" className="ab-format-text-button" onMouseDown={(event) => event.preventDefault()} onClick={() => onMark("note")}>+注释</button>
     </div>
   );
 }
@@ -1927,35 +2344,4 @@ function LayersPanel({ elements, selectedId, onSelect, onMove }: { elements: Boo
       <p className="ab-helper-text">当前支持置顶、置底、上移、下移；本期不提供锁定和隐藏。</p>
     </div>
   );
-}
-
-function OrdersPanel({ page, onMove, getElement }: { page: AnimationBookPage; onMove: (order: "appearanceOrder" | "playbackOrder", id: string, direction: -1 | 1) => void; getElement: (id: string) => BookElement | undefined }) {
-  return (
-    <div className="ab-panel-content ab-orders-panel">
-      <div className="ab-panel-heading"><div><span className="ab-panel-eyebrow">页面节奏</span><h2>出现 / 播放顺序</h2></div><span className="ab-panel-note">无需时间轴</span></div>
-      <OrderList title="出现顺序" hint="控制元素进入页面的先后" ids={page.appearanceOrder} getElement={getElement} onMove={(id, direction) => onMove("appearanceOrder", id, direction)} />
-      <OrderList title="播放顺序" hint="文本和气泡的先后" ids={page.playbackOrder} getElement={getElement} onMove={(id, direction) => onMove("playbackOrder", id, direction)} />
-      <div className="ab-panel-extension-note"><CircleHelp size={14} /><span>当前只保存顺序，不配置时间轴和并行播放。</span></div>
-    </div>
-  );
-}
-
-function OrderList({ title, hint, ids, getElement, onMove }: { title: string; hint: string; ids: string[]; getElement: (id: string) => BookElement | undefined; onMove: (id: string, direction: -1 | 1) => void }) {
-  return (
-    <section className="ab-order-section">
-      <div className="ab-order-heading"><div><strong>{title}</strong><span>{hint}</span></div><span className="ab-order-count">{ids.length}</span></div>
-      <div className="ab-order-list">
-        {ids.length === 0 && <div className="ab-order-empty">暂无可排序内容</div>}
-        {ids.map((id, index) => {
-          const element = getElement(id);
-          if (!element) return null;
-          return <OrderItem key={id} label={elementName(element)} icon={element.type === "text" ? <Type size={13} /> : element.type === "image" ? <FileImage size={13} /> : element.type === "motion" ? <Film size={13} /> : <MessageCircle size={13} />} index={index} total={ids.length} onMove={(direction) => onMove(id, direction)} />;
-        })}
-      </div>
-    </section>
-  );
-}
-
-function OrderItem({ label, icon, index, total, onMove }: { label: string; icon: React.ReactNode; index: number; total: number; onMove: (direction: -1 | 1) => void }) {
-  return <div className="ab-order-item"><span className="ab-order-number">{index + 1}</span><span className="ab-order-icon">{icon}</span><span className="ab-order-label">{label}</span><button type="button" onClick={() => onMove(-1)} disabled={index === 0} aria-label="上移"><ArrowUp size={13} /></button><button type="button" onClick={() => onMove(1)} disabled={index === total - 1} aria-label="下移"><ArrowDown size={13} /></button></div>;
 }

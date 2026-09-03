@@ -181,7 +181,7 @@ const ALL_TEXT_COLOR_OPTIONS: TextColorOption[] = [
   ...DARK_PALETTE_TEXT_OPTIONS,
 ];
 
-/** 返回文字颜色选择器中的颜色：白色始终保留，其余只展示推荐颜色。 */
+/** 返回当前背景下可手动选择的文字颜色候选；候选范围沿用现有对比度筛选规则。 */
 export function getTextColorOptions(backgroundColorId: CoverColorId): TextColorOption[] {
   const background = getCoverColorHex(backgroundColorId);
 
@@ -213,7 +213,7 @@ export function getRecommendedTextColorOption(backgroundColorId: CoverColorId): 
 }
 
 /**
- * 获取当前产品规则下的固定默认字色：背景第 1–3 阶使用同色相第 6 阶，
+ * 获取当前产品规则下的默认字色：背景第 1–3 阶使用同色相第 6 阶，
  * 背景第 4–6 阶统一使用白色。
  */
 export function getDefaultTextColorOption(backgroundColorId: CoverColorId): TextColorOption {
