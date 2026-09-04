@@ -807,12 +807,14 @@
 .cover-direction-option__icon {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 3px 4px;
-  border: 1px solid currentColor;
-  border-radius: 5px;
   color: var(--cover-text-tertiary);
   line-height: 1;
+}
+
+.cover-direction-icon {
+  display: block;
+  width: 30px;
+  height: 22px;
 }
 
 .cover-direction-option:hover {

@@ -4,9 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Dices,
-  Image as ImageIcon,
   Loader2,
-  Type as TypeIcon,
   X,
 } from 'lucide-react';
 import { Switch } from '../../../components/Switch';
@@ -85,6 +83,31 @@ const COVER_TYPE_OPTIONS: Array<{
   { value: 'project', label: '项目封面' },
   { value: 'group', label: '项目组封面' },
 ];
+
+function DirectionIcon({ imageFirst }: { imageFirst: boolean }) {
+  return (
+    <svg className="cover-direction-icon" viewBox="0 0 32 22" role="presentation">
+      <rect x="1" y="1" width="30" height="20" rx="5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <g transform={imageFirst ? undefined : 'translate(32 0) scale(-1 1)'}>
+        <rect x="3" y="4" width="10" height="14" rx="3" fill="currentColor" opacity="0.14" />
+        <circle cx="8" cy="7.7" r="1.35" fill="currentColor" />
+        <path
+          d="M4.6 15.8 7.4 12.6a1 1 0 0 1 1.45-.05l1.8 1.8 1.2-1.35a1 1 0 0 1 1.5.05"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.35"
+        />
+        <g fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" opacity="0.82">
+          <path d="M17 7h10" />
+          <path d="M17 11h8" />
+          <path d="M17 15h6" />
+        </g>
+      </g>
+    </svg>
+  );
+}
 
 export function CoverTypeControl({ value, onChange }: CoverTypeControlProps) {
   const controlRef = useRef<HTMLDivElement | null>(null);
@@ -596,8 +619,7 @@ export const CoverForm: React.FC<CoverFormProps> = ({
                     onClick={() => onChange({ direction: option.value as LayoutDirection })}
                   >
                     <span className="cover-direction-option__icon" aria-hidden="true">
-                      {option.imageFirst ? <ImageIcon size={14} strokeWidth={2} /> : <TypeIcon size={14} strokeWidth={2} />}
-                      {option.imageFirst ? <TypeIcon size={14} strokeWidth={2} /> : <ImageIcon size={14} strokeWidth={2} />}
+                      <DirectionIcon imageFirst={option.imageFirst} />
                     </span>
                     <span>{option.label}</span>
                   </button>

@@ -303,7 +303,7 @@ export const CoverGenerator: React.FC = () => {
                   aria-pressed={exportScale === scale}
                   onClick={() => setExportScale(scale)}
                 >
-                  {scale === 2 ? '2x 高清' : '1x'}
+                  {scale === 2 ? '2x' : '1x'}
                 </button>
               ))}
             </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   AlignCenter,
@@ -12,11 +12,11 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  ChevronsDown,
-  ChevronsUp,
   ClipboardList,
   CircleX,
   CircleHelp,
+  Eye,
+  EyeOff,
   FileAudio,
   FileImage,
   Film,
@@ -30,7 +30,6 @@ import {
   Maximize2,
   MessageCircle,
   MousePointer2,
-  PanelLeft,
   Pause,
   Plus,
   Play,
@@ -42,6 +41,7 @@ import {
   Undo2,
   Underline,
   Upload,
+  X,
   Italic,
 } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -68,12 +68,15 @@ import {
   type BookElement,
   type BubbleElement,
   type CoverLayout,
+  type CoverTextField,
   type ImageElement,
   type MotionElement,
   type ProductionAsset,
   type ProductionRequirement,
   type PlaybackDisplayMode,
   type PlaybackOrderItem,
+  type QuestionElement,
+  type QuestionOption,
   type RequirementType,
   type TextAnnotation,
   type TextAnnotationType,
@@ -83,8 +86,10 @@ import {
 import "./animation-book.css";
 
 type ViewId = "cover" | string;
-type PanelTab = "properties" | "layers" | "requirements" | AnnotationPanelTab;
-type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+type PanelTab = "properties" | "requirements" | AnnotationPanelTab;
+type CanvasRequirementMode = "editing" | "preview";
+type CanvasRequirementModes = Record<string, CanvasRequirementMode>;
+type ResizeCorner = "top-left" | "top-right" | "middle-left" | "middle-right" | "bottom-left" | "bottom-right";
 
 interface PointerDrag {
   id: string;
@@ -117,6 +122,7 @@ interface PageAnnotation extends TextAnnotation {
 }
 
 type PageDropPosition = "before" | "after";
+type LayerDropPosition = "before" | "after";
 type PlaybackDropPosition = "before" | "after";
 
 const BASIC_INFO_MUSIC_OPTIONS = [
@@ -128,6 +134,23 @@ const BASIC_INFO_MUSIC_OPTIONS = [
 ];
 
 const ANIMATION_BOOK_GRID_ASSET = "/animation-book/assets/animation-book-grid-system.png";
+const BODY_TEXT_FONT_FAMILY = '"PingFang SC", "PingFang TC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif';
+const BODY_TEXT_PARAGRAPH_INDENT = "32px";
+const QUESTION_CANVAS_X = 1044;
+const QUESTION_CANVAS_Y = 198;
+const QUESTION_CANVAS_WIDTH = 540;
+const QUESTION_CANVAS_HEIGHT = 612;
+const QUESTION_MIN_OPTIONS = 2;
+const QUESTION_MAX_OPTIONS = 4;
+const COVER_SPLIT_IMAGE = { x: 286, y: 201, width: 678, height: 678 } as const;
+const COVER_SPLIT_TEXT = { x: 994, y: 270, width: 640, height: 540 } as const;
+const COVER_FULLSCREEN_MEDIA = { x: 0, y: 0, width: CANVAS_WIDTH, height: CANVAS_HEIGHT } as const;
+const COVER_TEXT_GEOMETRY: Record<CoverTextField, { x: number; y: number; width: number; height: number }> = {
+  title: { x: COVER_SPLIT_TEXT.x, y: 330, width: COVER_SPLIT_TEXT.width, height: 90 },
+  topic: { x: COVER_SPLIT_TEXT.x, y: 528, width: COVER_SPLIT_TEXT.width, height: 72 },
+  wordCount: { x: COVER_SPLIT_TEXT.x, y: 600, width: COVER_SPLIT_TEXT.width, height: 72 },
+  fiction: { x: COVER_SPLIT_TEXT.x, y: 672, width: COVER_SPLIT_TEXT.width, height: 72 },
+};
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -136,7 +159,27 @@ const elementName = (element: BookElement) => {
   if (element.type === "text") return element.content.split("\n")[0] || "未命名文本";
   if (element.type === "image") return element.alt || "未命名图片";
   if (element.type === "motion") return element.fileName || "未命名动效";
+  if (element.type === "question") return element.stem.split("\n")[0] || "题目";
   return element.content.split("\n")[0] || "未命名气泡";
+};
+
+const getLayerTypeLabel = (type: string) => {
+  if (type === "text") return "文本";
+  if (type === "image") return "图片";
+  if (type === "motion") return "动效";
+  if (type === "bubble") return "对话";
+  if (type === "question") return "题";
+  if (type === "interaction") return "互动";
+  return "元素";
+};
+
+const getLayerTypeIcon = (type: string) => {
+  if (type === "text") return <Type size={14} aria-hidden="true" />;
+  if (type === "image") return <FileImage size={14} aria-hidden="true" />;
+  if (type === "motion") return <Film size={14} aria-hidden="true" />;
+  if (type === "question") return <Gamepad2 size={14} aria-hidden="true" />;
+  if (type === "interaction") return <Hand size={14} aria-hidden="true" />;
+  return <MessageCircle size={14} aria-hidden="true" />;
 };
 
 const getPage = (book: AnimationBook, viewId: ViewId) =>
@@ -187,6 +230,22 @@ const createVisualRequirement = (element: ImageElement | MotionElement): Product
   status: "pending",
 });
 
+const isEmptyVisualRequirement = (requirement: ProductionRequirement) =>
+  (requirement.type === "image" || requirement.type === "motion") &&
+  requirement.target?.kind === "element" &&
+  !requirement.brief.text.trim() &&
+  !/<img\b/i.test(requirement.brief.html);
+
+const getDefaultCanvasRequirementModes = (
+  page: AnimationBookPage | undefined,
+  role: UserRole = "research",
+): CanvasRequirementModes =>
+  Object.fromEntries(
+    (page?.requirements ?? [])
+      .filter((requirement) => isEmptyVisualRequirement(requirement) || role === "production" && !requirement.asset)
+      .map((requirement) => [requirement.id, "preview" as const]),
+  );
+
 const readFileAsDataUrl = (file: File, onReady: (dataUrl: string) => void, onError?: () => void) => {
   const reader = new FileReader();
   reader.onload = () => onReady(reader.result as string);
@@ -194,22 +253,33 @@ const readFileAsDataUrl = (file: File, onReady: (dataUrl: string) => void, onErr
   reader.readAsDataURL(file);
 };
 
-const getVoiceItems = (page: AnimationBookPage): VoiceItem[] => page.elements
-  .filter((element): element is TextElement | BubbleElement => element.type === "text" || element.type === "bubble")
+const getVoiceItems = (page: AnimationBookPage): VoiceItem[] => {
+  const typeCounts: Record<"text" | "bubble", number> = { text: 0, bubble: 0 };
+  return page.elements
+    .filter((element): element is TextElement | BubbleElement => element.type === "text" || element.type === "bubble")
+    .map((element) => {
+      typeCounts[element.type] += 1;
+      return {
+        id: element.id,
+        type: element.type,
+        label: (element.type === "text" ? "文本" : "对话") + typeCounts[element.type],
+        content: element.content,
+        voiceSupplement: element.voiceSupplement ?? "",
+      };
+    });
+};
+
+const createPlaybackOrder = (elements: BookElement[]): PlaybackOrderItem[] => elements
+  .filter((element) => element.type !== "question")
   .map((element) => ({
-    id: element.id,
-    type: element.type,
-    content: element.content,
-    hasAudio: Boolean(element.audioUrl),
+    elementId: element.id,
+    displayMode: "always",
   }));
 
-const createPlaybackOrder = (elements: BookElement[]): PlaybackOrderItem[] => elements.map((element) => ({
-  elementId: element.id,
-  displayMode: "always",
-}));
-
 const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] => {
-  const elementsById = new Map(page.elements.map((element) => [element.id, element]));
+  const elementsById = new Map(page.elements
+    .filter((element) => element.type !== "question")
+    .map((element) => [element.id, element]));
   const rawItems = (page.playbackOrder ?? []) as Array<PlaybackOrderItem | string>;
   const normalized = rawItems
     .map((item) => {
@@ -225,7 +295,7 @@ const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] =>
   return [
     ...uniqueItems,
     ...page.elements
-      .filter((element) => !existingIds.has(element.id))
+      .filter((element) => element.type !== "question" && !existingIds.has(element.id))
       .map((element) => ({ elementId: element.id, displayMode: "always" as const })),
   ];
 };
@@ -234,7 +304,8 @@ const needsDeleteConfirmation = (element: BookElement) =>
   (element.type === "text" && element.content.trim().length > 0) ||
   (element.type === "bubble" && element.content.trim().length > 0) ||
   (element.type === "image" && element.src.trim().length > 0) ||
-  (element.type === "motion" && Boolean(element.src));
+  (element.type === "motion" && Boolean(element.src)) ||
+  element.type === "question";
 
 export function AnimationBookEditor() {
   const [book, setBook] = useState<AnimationBook>(() => structuredClone(initialAnimationBook));
@@ -243,8 +314,11 @@ export function AnimationBookEditor() {
   const [selectedId, setSelectedId] = useState<string | null>("page-1-text");
   const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>("page-1-image-brief");
   const [editingTextId, setEditingTextId] = useState<string | null>("page-1-text");
-  const [activeRequirement, setActiveRequirement] = useState<{ id: string; mode: "editing" | "preview" } | null>(null);
+  const [canvasRequirementModes, setCanvasRequirementModes] = useState<CanvasRequirementModes>(() =>
+    getDefaultCanvasRequirementModes(initialAnimationBook.pages[0]),
+  );
   const [panelTab, setPanelTab] = useState<PanelTab>("voice");
+  const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; position: PageDropPosition } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -261,16 +335,31 @@ export function AnimationBookEditor() {
   const [backgroundMusicChoice, setBackgroundMusicChoice] = useState("spring");
   const [backgroundMusicStyle, setBackgroundMusicStyle] = useState("安静");
   const [showSafeArea, setShowSafeArea] = useState(true);
+  const [autoHeightElementId, setAutoHeightElementId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const imageUploadInputRef = useRef<HTMLInputElement>(null);
+  const [imageUploadTargetId, setImageUploadTargetId] = useState<string | null>(null);
+  const coverMediaUploadInputRef = useRef<HTMLInputElement>(null);
+  const [coverMediaUploadTargetId, setCoverMediaUploadTargetId] = useState<string | null>(null);
+  const [coverMediaUploadAccept, setCoverMediaUploadAccept] = useState("image/*");
   const pointerDragRef = useRef<PointerDrag | null>(null);
 
   const currentPage = getPage(book, viewId);
   const isResearch = role === "research";
   const selectedElement = currentPage?.elements.find((element) => element.id === selectedId) ?? null;
+  const currentQuestion = currentPage?.elements.find(
+    (element): element is QuestionElement => element.type === "question",
+  ) ?? null;
+  const hasQuestion = Boolean(currentQuestion);
   const isTextToolActive = isResearch && selectedElement?.type === "text" && editingTextId === selectedElement.id;
   const sortedElements = useMemo(
-    () => [...(currentPage?.elements ?? [])].sort((a, b) => a.zIndex - b.zIndex),
-    [currentPage],
+    () => [...(currentPage?.elements ?? [])]
+      .filter((element) => element.hidden !== true)
+      .filter((element) => currentPage?.kind !== "cover" || (book.coverLayout === "split"
+        ? element.id !== "cover-motion"
+        : element.id === "cover-image" || element.id === "cover-motion"))
+      .sort((a, b) => a.zIndex - b.zIndex),
+    [book.coverLayout, currentPage],
   );
   const layerElements = useMemo(
     () => [...(currentPage?.elements ?? [])].sort((a, b) => b.zIndex - a.zIndex),
@@ -297,13 +386,65 @@ export function AnimationBookEditor() {
     window.setTimeout(() => setToast(null), 2200);
   };
 
+  const changeCoverLayout = (layout: CoverLayout) => {
+    if (!isResearch || layout === book.coverLayout) return;
+    const hasText = book.cover.elements.some((element) => element.type === "text" && element.content.trim());
+    if (layout === "fullscreen" && hasText && !window.confirm("切换为全屏布局将清空封面文字内容，是否继续？")) return;
+    setBook((previous) => updatePage(
+      { ...previous, coverLayout: layout },
+      "cover",
+      (page) => ({
+        ...page,
+        elements: page.elements.map((element) => {
+          if (element.id === "cover-image" && element.type === "image") {
+            return { ...element, ...COVER_SPLIT_IMAGE, hidden: false };
+          }
+          if (element.id === "cover-motion" && element.type === "motion") {
+            return { ...element, ...COVER_FULLSCREEN_MEDIA, hidden: layout !== "fullscreen" };
+          }
+          if (element.type === "text" && element.coverField) {
+            return {
+              ...element,
+              ...COVER_TEXT_GEOMETRY[element.coverField],
+              content: layout === "fullscreen" ? "" : element.content,
+            };
+          }
+          return element;
+        }),
+      }),
+    ));
+    setSelectedId(layout === "fullscreen" ? "cover-image" : "cover-title");
+    setEditingTextId(null);
+  };
+
+  const changeCoverMedia = (type: "image" | "motion") => {
+    if (!isResearch || book.coverLayout !== "fullscreen") return;
+    const current = book.cover.elements.find((element) => element.id === "cover-motion" && element.hidden !== true) ? "motion" : "image";
+    if (current === type) return;
+    if (!window.confirm("切换媒体类型将清空当前封面媒体及对应需求，是否继续？")) return;
+    setBook((previous) => ({ ...previous, cover: {
+      ...previous.cover,
+      elements: previous.cover.elements.map((element) => element.id === "cover-image" && element.type === "image"
+        ? { ...element, ...COVER_FULLSCREEN_MEDIA, hidden: type !== "image", src: type === "image" ? element.src : "" }
+        : element.id === "cover-motion" && element.type === "motion" ? { ...element, ...COVER_FULLSCREEN_MEDIA, hidden: type !== "motion", src: type === "motion" ? element.src : null } : element),
+      requirements: previous.cover.requirements.map((item) => item.type === type ? item : item.type === "image" || item.type === "motion" ? {
+        ...item,
+        brief: { html: "", text: "" },
+        supplementalBrief: undefined,
+        asset: null,
+        status: "pending" as const,
+        errorMessage: undefined,
+      } : item),
+    }}));
+  };
+
   const selectView = (nextViewId: ViewId) => {
     const nextPage = getPage(book, nextViewId);
     setViewId(nextViewId);
     setSelectedId(nextPage?.elements[0]?.id ?? null);
     setSelectedRequirementId(nextPage?.requirements[0]?.id ?? null);
     setEditingTextId(null);
-    setActiveRequirement(null);
+    setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage, role));
     setPendingDelete(null);
     setPendingPageDelete(null);
     setPendingAnnotationDelete(null);
@@ -324,7 +465,7 @@ export function AnimationBookEditor() {
   const selectRole = (nextRole: UserRole) => {
     setRole(nextRole);
     setEditingTextId(null);
-    setActiveRequirement(null);
+    setCanvasRequirementModes(getDefaultCanvasRequirementModes(currentPage, nextRole));
     setPendingDelete(null);
     setPendingPageDelete(null);
     setPendingAnnotationDelete(null);
@@ -349,16 +490,53 @@ export function AnimationBookEditor() {
     setBook((previous) => updatePage(previous, viewId, updater));
   };
 
+  const setCanvasRequirementMode = (requirementId: string, mode: CanvasRequirementMode | null) => {
+    setCanvasRequirementModes((current) => {
+      const next = { ...current };
+      if (mode === null) {
+        delete next[requirementId];
+        return next;
+      }
+      if (mode === "editing") {
+        Object.keys(next).forEach((id) => {
+          if (id !== requirementId && next[id] === "editing") next[id] = "preview";
+        });
+      }
+      next[requirementId] = mode;
+      return next;
+    });
+  };
+
+  const finishActiveCanvasRequirementEdit = () => {
+    const editingRequirementId = Object.entries(canvasRequirementModes)
+      .find(([, mode]) => mode === "editing")?.[0];
+    if (editingRequirementId) setCanvasRequirementMode(editingRequirementId, "preview");
+  };
+
+  useEffect(() => {
+    if (!Object.values(canvasRequirementModes).includes("editing")) return undefined;
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".ab-canvas-requirement.is-editing")) return;
+      setCanvasRequirementModes((current) => {
+        const editingRequirementId = Object.entries(current)
+          .find(([, mode]) => mode === "editing")?.[0];
+        if (!editingRequirementId) return current;
+        return { ...current, [editingRequirementId]: "preview" };
+      });
+    };
+    document.addEventListener("pointerdown", handleDocumentPointerDown);
+    return () => document.removeEventListener("pointerdown", handleDocumentPointerDown);
+  }, [canvasRequirementModes]);
+
   const selectElement = (elementId: string) => {
+    finishActiveCanvasRequirementEdit();
     setSelectedId(elementId);
-    setActiveRequirement(null);
     const nextElement = currentPage?.elements.find((element) => element.id === elementId);
+    if (nextElement?.type === "question") setPanelTab("question");
     if (nextElement?.type !== "text") {
       setTextSelection(null);
       setSelectedAnnotationId(null);
-      if (isResearch) setPanelTab("properties");
-    } else if (isResearch) {
-      setPanelTab("voice");
     }
   };
 
@@ -374,12 +552,8 @@ export function AnimationBookEditor() {
     }
     setSelectedId(element.id);
     setSelectedRequirementId(requirement.id);
-    setActiveRequirement((active) => {
-      if (active?.id === requirement.id && active.mode === "editing") {
-        return { id: requirement.id, mode: "preview" };
-      }
-      return { id: requirement.id, mode: isResearch ? "editing" : "preview" };
-    });
+    const currentMode = canvasRequirementModes[requirement.id];
+    setCanvasRequirementMode(requirement.id, currentMode ? null : "preview");
   };
 
   const updateCanvasRequirement = (requirementId: string, brief: ProductionRequirement["brief"]) => {
@@ -393,22 +567,83 @@ export function AnimationBookEditor() {
   };
 
   const finishCanvasRequirementEdit = (requirementId: string) => {
-    setActiveRequirement((active) => active?.id === requirementId
-      ? { id: requirementId, mode: "preview" }
-      : active);
+    setCanvasRequirementMode(requirementId, "preview");
   };
 
   const updateElementById = (elementId: string, patch: Partial<BookElement>) => {
     if (!isResearch) return;
+    const contentPatch = (patch as Partial<TextElement>).content;
+    if (currentPage.kind === "cover") {
+      const element = currentPage.elements.find((candidate) => candidate.id === elementId);
+      if (element?.type !== "text" || !element.coverField || Object.keys(patch).some((key) => key !== "content")) return;
+    }
     modifyCurrentPage((page) =>
-      replaceElement(page, elementId, (element) => ({ ...element, ...patch } as BookElement)),
+      replaceElement(page, elementId, (element) => {
+        if (page.kind === "cover") {
+          return element.type === "text" && element.coverField && typeof contentPatch === "string"
+            ? { ...element, content: contentPatch }
+            : element;
+        }
+        return { ...element, ...patch } as BookElement;
+      }),
     );
+  };
+
+  const updateQuestion = (
+    elementId: string,
+    patch: Partial<Pick<QuestionElement, "stem" | "optionMode">>,
+  ) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (element) =>
+      element.type === "question" ? { ...element, ...patch } : element,
+    ));
+  };
+
+  const updateQuestionOption = (
+    elementId: string,
+    optionId: string,
+    patch: Partial<Pick<QuestionOption, "content" | "isCorrect">>,
+  ) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (element) =>
+      element.type === "question"
+        ? {
+            ...element,
+            options: element.options.map((option) => option.id === optionId ? { ...option, ...patch } : option),
+          }
+        : element,
+    ));
+  };
+
+  const addQuestionOption = (elementId: string) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (element) => {
+      if (element.type !== "question" || element.options.length >= QUESTION_MAX_OPTIONS) return element;
+      return {
+        ...element,
+        options: [...element.options, { id: createId("question-option"), content: "", isCorrect: false }],
+      };
+    }));
+  };
+
+  const removeQuestionOption = (elementId: string, optionId: string) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (element) => {
+      if (element.type !== "question" || element.options.length <= QUESTION_MIN_OPTIONS) return element;
+      return {
+        ...element,
+        options: element.options.filter((option) => option.id !== optionId),
+      };
+    }));
   };
 
   const updateTextContent = (elementId: string, content: string) => {
     if (!isResearch) return;
     modifyCurrentPage((page) => replaceElement(page, elementId, (element) => {
       if (element.type !== "text") return element;
+      if (page.kind === "cover") {
+        return element.coverField ? { ...element, content } : element;
+      }
       return {
         ...element,
         content,
@@ -417,8 +652,16 @@ export function AnimationBookEditor() {
     }));
   };
 
+  const updateVoiceSupplement = (elementId: string, voiceSupplement: string) => {
+    if (!isResearch || currentPage.kind === "cover") return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (element) => {
+      if (element.type !== "text" && element.type !== "bubble") return element;
+      return { ...element, voiceSupplement };
+    }));
+  };
+
   const updateAnnotation = (annotationId: string, patch: Partial<TextAnnotation>) => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
     modifyCurrentPage((page) => ({
       ...page,
       elements: page.elements.map((element) => {
@@ -434,7 +677,7 @@ export function AnimationBookEditor() {
   };
 
   const handleTextSelection = (elementId: string, selectionRange: TextSelectionRange | null) => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
     if (!selectionRange || selectionRange.start === selectionRange.end) {
       setTextSelection(null);
       return;
@@ -446,7 +689,7 @@ export function AnimationBookEditor() {
   };
 
   const addTextAnnotation = (type: TextAnnotationType) => {
-    if (!isResearch || !textSelection) return;
+    if (!isResearch || currentPage.kind === "cover" || !textSelection) return;
     const element = currentPage?.elements.find((candidate) => candidate.id === textSelection.elementId);
     if (!element || element.type !== "text") return;
     const annotation = createAnnotation(
@@ -476,13 +719,20 @@ export function AnimationBookEditor() {
 
   const selectAnnotationTab = (tab: AnnotationPanelTab) => {
     setPanelTab(tab);
+    if (tab === "question") {
+      if (currentQuestion) selectElement(currentQuestion.id);
+      setEditingTextId(null);
+      setTextSelection(null);
+      setSelectedAnnotationId(null);
+      return;
+    }
     if (tab === "voice" || tab === "standard" || tab === "playback") return;
     const firstAnnotation = currentAnnotations.find((annotation) => annotation.type === tab);
     setSelectedAnnotationId(firstAnnotation?.id ?? null);
   };
 
   const removeAnnotation = (annotationId: string) => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
     modifyCurrentPage((page) => ({
       ...page,
       elements: page.elements.map((element) => element.type === "text"
@@ -498,7 +748,7 @@ export function AnimationBookEditor() {
   };
 
   const requestRemoveAnnotation = (annotationId: string) => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
     const annotation = currentAnnotations.find((candidate) => candidate.id === annotationId);
     if (!annotation) return;
     if (hasAnnotationContent(annotation)) {
@@ -513,9 +763,9 @@ export function AnimationBookEditor() {
     if (annotation) updateAnnotation(annotationId, { voiceRequest: annotation.text });
   };
 
-  const updateElementGeometry = (elementId: string, patch: Pick<BookElement, "x" | "y" | "width" | "height"> | Partial<Pick<BubbleElement, "direction" | "tailX" | "tailY">>) => {
+  const updateElementGeometry = (elementId: string, patch: Partial<Pick<BookElement, "x" | "y" | "width" | "height">> | Partial<Pick<BubbleElement, "direction" | "tailX" | "tailY">>) => {
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
-    if (!element || (!isResearch && !["image", "motion", "bubble"].includes(element.type))) return;
+    if (!element || currentPage.kind === "cover" || element.type === "question" || (!isResearch && !["image", "motion", "bubble"].includes(element.type))) return;
     modifyCurrentPage((page) =>
       replaceElement(page, elementId, (candidate) => ({ ...candidate, ...patch } as BookElement)),
     );
@@ -526,31 +776,35 @@ export function AnimationBookEditor() {
   };
 
   const addElement = (element: BookElement) => {
-    if (!isResearch) return;
-    const visualRequirement = element.type === "image" || element.type === "motion"
-      ? createVisualRequirement(element)
+    if (!isResearch || currentPage.kind === "cover") return;
+    const elementToAdd = { ...element, hidden: element.hidden === true };
+    const visualRequirement = elementToAdd.type === "image" || elementToAdd.type === "motion"
+      ? createVisualRequirement(elementToAdd)
       : null;
     modifyCurrentPage((page) => ({
       ...page,
-      elements: [...page.elements, element],
-      appearanceOrder: [...page.appearanceOrder, element.id],
+      elements: [...page.elements, elementToAdd],
+      appearanceOrder: [...page.appearanceOrder, elementToAdd.id],
       requirements: visualRequirement
         ? [...page.requirements, visualRequirement]
         : page.requirements,
-      playbackOrder: page.kind === "page"
+      playbackOrder: page.kind === "page" && elementToAdd.type !== "question"
         ? [...normalizePlaybackOrder(page), {
-            elementId: element.id,
+            elementId: elementToAdd.id,
             displayMode: "always" as const,
           }]
         : page.playbackOrder,
     }));
-    setSelectedId(element.id);
-    setEditingTextId(element.type === "bubble" ? element.id : null);
-    setActiveRequirement(visualRequirement ? { id: visualRequirement.id, mode: "editing" } : null);
-    if (visualRequirement) setSelectedRequirementId(visualRequirement.id);
+    setSelectedId(elementToAdd.id);
+    setEditingTextId(elementToAdd.type === "bubble" ? elementToAdd.id : null);
+    if (visualRequirement) {
+      setSelectedRequirementId(visualRequirement.id);
+      setCanvasRequirementMode(visualRequirement.id, "preview");
+    }
     setSelectedAnnotationId(null);
     setTextSelection(null);
-    setPanelTab(element.type === "text" || element.type === "bubble" ? "voice" : "properties");
+    if (elementToAdd.type === "text" || elementToAdd.type === "bubble") setPanelTab("voice");
+    if (elementToAdd.type === "question") setPanelTab("question");
   };
 
   const addText = () => {
@@ -567,6 +821,7 @@ export function AnimationBookEditor() {
       color: "#404040",
       fontWeight: "regular",
       audioUrl: null,
+      voiceSupplement: "",
       annotations: [],
     });
   };
@@ -585,6 +840,7 @@ export function AnimationBookEditor() {
       tailX: 8,
       tailY: 68,
       audioUrl: null,
+      voiceSupplement: "",
     });
   };
 
@@ -620,6 +876,39 @@ export function AnimationBookEditor() {
       fileName: "待上传动效",
       objectFit: "contain",
     });
+  };
+
+  const addQuestion = () => {
+    if (!isResearch || currentPage.kind !== "page") return;
+    if (currentQuestion) {
+      selectElement(currentQuestion.id);
+      setPanelTab("question");
+      return;
+    }
+    const question: QuestionElement = {
+      id: createId("question"),
+      type: "question",
+      x: QUESTION_CANVAS_X,
+      y: QUESTION_CANVAS_Y,
+      width: QUESTION_CANVAS_WIDTH,
+      height: QUESTION_CANVAS_HEIGHT,
+      zIndex: Math.max(0, ...currentPage.elements.map((element) => element.zIndex)) + 1,
+      hidden: false,
+      stem: "",
+      optionMode: "text",
+      options: Array.from({ length: 4 }, (_, index) => ({
+        id: createId(`question-option-${String.fromCharCode(65 + index)}`),
+        content: "",
+        isCorrect: false,
+      })),
+    };
+    addElement(question);
+    setPanelTab("question");
+  };
+
+  const addInteraction = () => {
+    if (!isResearch || currentPage.kind !== "page" || hasQuestion) return;
+    notify("互动功能将在下一版本开放");
   };
 
   const requestAudioUpload = () => {
@@ -727,6 +1016,7 @@ export function AnimationBookEditor() {
         const currentRequirement = page.requirements.find((candidate) => candidate.id === requirementId);
         return currentRequirement ? updateRequirementTargetAsset(page, currentRequirement, asset) : page;
       });
+      setCanvasRequirementMode(requirementId, null);
       notify("产物已上传");
     }, () => {
       modifyCurrentPage((page) => ({
@@ -737,8 +1027,128 @@ export function AnimationBookEditor() {
     });
   };
 
+  const requestImageUpload = (elementId: string) => {
+    if (isResearch) return;
+    setSelectedId(elementId);
+    setImageUploadTargetId(elementId);
+    if (imageUploadInputRef.current) {
+      imageUploadInputRef.current.value = "";
+      imageUploadInputRef.current.click();
+    }
+  };
+
+  const requestCoverMediaUpload = (elementId: string) => {
+    if (isResearch) return;
+    const element = currentPage?.elements.find(
+      (candidate): candidate is ImageElement | MotionElement =>
+        candidate.id === elementId && (candidate.type === "image" || candidate.type === "motion"),
+    );
+    if (!element) return;
+    setSelectedId(elementId);
+    setCoverMediaUploadTargetId(elementId);
+    setCoverMediaUploadAccept(element.type === "image" ? "image/*" : "image/*,video/*");
+    if (coverMediaUploadInputRef.current) {
+      coverMediaUploadInputRef.current.value = "";
+      coverMediaUploadInputRef.current.click();
+    }
+  };
+
+  const handleImageUploadChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const elementId = imageUploadTargetId;
+    setImageUploadTargetId(null);
+    if (!file || !elementId) return;
+    const imageElement = currentPage?.elements.find(
+      (element): element is ImageElement => element.id === elementId && element.type === "image",
+    );
+    const requirement = imageElement ? getVisualRequirement(currentPage, imageElement) : undefined;
+    if (!requirement) {
+      notify("当前图片框暂未绑定图片需求");
+      return;
+    }
+    handleRequirementUpload(requirement.id, file);
+  };
+
+  const handleCoverMediaUploadChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const elementId = coverMediaUploadTargetId;
+    setCoverMediaUploadTargetId(null);
+    if (!file || !elementId) return;
+    const mediaElement = currentPage?.elements.find(
+      (element): element is ImageElement | MotionElement =>
+        element.id === elementId && (element.type === "image" || element.type === "motion"),
+    );
+    const requirement = mediaElement ? getVisualRequirement(currentPage, mediaElement) : undefined;
+    if (!requirement) {
+      notify("当前封面媒体暂未绑定对应需求");
+      return;
+    }
+    handleRequirementUpload(requirement.id, file);
+  };
+
+  const clearImageAsset = (elementId: string) => {
+    if (isResearch) return;
+    const imageElement = currentPage?.elements.find(
+      (element): element is ImageElement => element.id === elementId && element.type === "image",
+    );
+    const requirementId = imageElement ? getVisualRequirement(currentPage, imageElement)?.id ?? null : null;
+    modifyCurrentPage((page) => {
+      const imageElement = page.elements.find(
+        (element): element is ImageElement => element.id === elementId && element.type === "image",
+      );
+      if (!imageElement) return page;
+      const requirement = getVisualRequirement(page, imageElement);
+      return {
+        ...page,
+        elements: page.elements.map((element) =>
+          element.id === elementId && element.type === "image"
+            ? { ...element, src: "" }
+            : element,
+        ),
+        requirements: requirement
+          ? page.requirements.map((candidate) => candidate.id === requirement.id
+            ? { ...candidate, asset: null, status: "pending" as const, errorMessage: undefined }
+            : candidate)
+          : page.requirements,
+      };
+    });
+    if (requirementId) setCanvasRequirementMode(requirementId, "preview");
+    setSelectedId(elementId);
+    notify("图片已删除，可重新上传");
+  };
+
+  const clearMotionAsset = (elementId: string) => {
+    if (isResearch) return;
+    modifyCurrentPage((page) => {
+      const motionElement = page.elements.find(
+        (element): element is MotionElement => element.id === elementId && element.type === "motion",
+      );
+      if (!motionElement) return page;
+      const requirement = getVisualRequirement(page, motionElement);
+      return {
+        ...page,
+        elements: page.elements.map((element) =>
+          element.id === elementId && element.type === "motion"
+            ? { ...element, src: null, fileName: "待上传动效" }
+            : element,
+        ),
+        requirements: requirement
+          ? page.requirements.map((candidate) => candidate.id === requirement.id
+            ? { ...candidate, asset: null, status: "pending" as const, errorMessage: undefined }
+            : candidate)
+          : page.requirements,
+      };
+    });
+    setSelectedId(elementId);
+    notify("动效已删除，可重新上传");
+  };
+
   const removeElement = (elementId: string) => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
+    const removedElement = currentPage?.elements.find((element) => element.id === elementId);
+    const removedRequirementId = currentPage?.requirements.find(
+      (requirement) => requirement.target?.kind === "element" && requirement.target.elementId === elementId,
+    )?.id;
     modifyCurrentPage((page) => ({
       ...page,
       elements: page.elements.filter((element) => element.id !== elementId),
@@ -750,14 +1160,15 @@ export function AnimationBookEditor() {
     }));
     setSelectedId(null);
     setEditingTextId(null);
-    setActiveRequirement(null);
+    if (removedRequirementId) setCanvasRequirementMode(removedRequirementId, null);
     setSelectedAnnotationId(null);
     setTextSelection(null);
     setPendingDelete(null);
+    if (removedElement?.type === "question") setPanelTab("voice");
   };
 
   const requestRemoveElement = (elementId: string) => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
     if (!element) return;
     if (needsDeleteConfirmation(element)) {
@@ -783,23 +1194,7 @@ export function AnimationBookEditor() {
       label: `正文 ${book.pages.length + 1}`,
       kind: "page",
       backgroundColor: "#fefcf8",
-      elements: [
-        {
-          id: createId("text"),
-          type: "text",
-          x: 180,
-          y: 220,
-          width: 1560,
-          height: 220,
-          zIndex: 1,
-          content: "在这里输入页面文本",
-          fontSize: 42,
-          color: "#404040",
-          fontWeight: "regular",
-          audioUrl: null,
-          annotations: [],
-        },
-      ],
+      elements: [],
       appearanceOrder: [],
       playbackOrder: [],
       requirements: [],
@@ -808,8 +1203,9 @@ export function AnimationBookEditor() {
     newPage.playbackOrder = createPlaybackOrder(newPage.elements);
     setBook((previous) => ({ ...previous, pages: [...previous.pages, newPage] }));
     setViewId(id);
-    setSelectedId(newPage.elements[0].id);
-    setActiveRequirement(null);
+    setSelectedId(null);
+    setSelectedRequirementId(null);
+    setCanvasRequirementModes({});
     setEditingTextId(null);
     notify("已添加新页面");
   };
@@ -834,7 +1230,7 @@ export function AnimationBookEditor() {
       setViewId(nextPage?.id ?? "cover");
       setSelectedId(nextPage?.elements[0]?.id ?? null);
       setSelectedRequirementId(nextPage?.requirements[0]?.id ?? null);
-      setActiveRequirement(null);
+      setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage, role));
       setEditingTextId(null);
       setSelectedAnnotationId(null);
       setTextSelection(null);
@@ -924,11 +1320,20 @@ export function AnimationBookEditor() {
     corner?: ResizeCorner,
   ) => {
     event.stopPropagation();
+    if (currentPage?.kind === "cover") {
+      setSelectedId(element.id);
+      return;
+    }
     if ((mode === "tail" && element.type !== "bubble") || (!isResearch && !["image", "motion", "bubble"].includes(element.type))) {
       setSelectedId(element.id);
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    setAutoHeightElementId(
+      mode === "resize" && element.type === "text" && (corner === "middle-left" || corner === "middle-right")
+        ? element.id
+        : null,
+    );
     pointerDragRef.current = {
       id: element.id,
       mode,
@@ -976,6 +1381,7 @@ export function AnimationBookEditor() {
     } else if (drag.corner) {
       const fromLeft = drag.corner.includes("left");
       const fromTop = drag.corner.includes("top");
+      const isHorizontalResize = drag.corner === "middle-left" || drag.corner === "middle-right";
       const right = drag.origin.x + drag.origin.width;
       const bottom = drag.origin.y + drag.origin.height;
       if (fromLeft) {
@@ -984,11 +1390,13 @@ export function AnimationBookEditor() {
       } else {
         next.width = clamp(drag.origin.width + deltaX, minWidth, CANVAS_WIDTH - drag.origin.x);
       }
-      if (fromTop) {
-        next.y = clamp(drag.origin.y + deltaY, 0, bottom - minHeight);
-        next.height = bottom - next.y;
-      } else {
-        next.height = clamp(drag.origin.height + deltaY, minHeight, CANVAS_HEIGHT - drag.origin.y);
+      if (!isHorizontalResize) {
+        if (fromTop) {
+          next.y = clamp(drag.origin.y + deltaY, 0, bottom - minHeight);
+          next.height = bottom - next.y;
+        } else {
+          next.height = clamp(drag.origin.height + deltaY, minHeight, CANVAS_HEIGHT - drag.origin.y);
+        }
       }
     }
     updateSelectedElement(next);
@@ -996,30 +1404,67 @@ export function AnimationBookEditor() {
 
   const endPointerDrag = () => {
     pointerDragRef.current = null;
+    setAutoHeightElementId(null);
+  };
+
+  const applyLayerOrder = (page: AnimationBookPage, ordered: BookElement[]) => {
+    const zIndexById = new Map(ordered.map((element, index) => [element.id, ordered.length - index]));
+    return {
+      ...page,
+      elements: page.elements.map((element) => ({
+        ...element,
+        zIndex: zIndexById.get(element.id) ?? element.zIndex,
+      })),
+    };
   };
 
   const moveLayer = (elementId: string, direction: "up" | "down" | "top" | "bottom") => {
-    if (!isResearch) return;
+    if (!isResearch || currentPage.kind === "cover") return;
     modifyCurrentPage((page) => {
-      const ordered = [...page.elements].sort((a, b) => a.zIndex - b.zIndex);
+      const ordered = [...page.elements].sort((a, b) => b.zIndex - a.zIndex);
       const index = ordered.findIndex((element) => element.id === elementId);
       if (index < 0) return page;
       let targetIndex = index;
-      if (direction === "up") targetIndex = Math.min(index + 1, ordered.length - 1);
-      if (direction === "down") targetIndex = Math.max(index - 1, 0);
-      if (direction === "top") targetIndex = ordered.length - 1;
-      if (direction === "bottom") targetIndex = 0;
+      if (direction === "up") targetIndex = Math.max(index - 1, 0);
+      if (direction === "down") targetIndex = Math.min(index + 1, ordered.length - 1);
+      if (direction === "top") targetIndex = 0;
+      if (direction === "bottom") targetIndex = ordered.length - 1;
       if (targetIndex === index) return page;
       const [moved] = ordered.splice(index, 1);
       ordered.splice(targetIndex, 0, moved);
-      return {
-        ...page,
-        elements: page.elements.map((element) => ({
-          ...element,
-          zIndex: ordered.findIndex((candidate) => candidate.id === element.id) + 1,
-        })),
-      };
+      return applyLayerOrder(page, ordered);
     });
+  };
+
+  const reorderLayer = (elementId: string, targetElementId: string, position: LayerDropPosition) => {
+    if (!isResearch || currentPage.kind === "cover" || elementId === targetElementId) return;
+    modifyCurrentPage((page) => {
+      const ordered = [...page.elements].sort((a, b) => b.zIndex - a.zIndex);
+      const sourceIndex = ordered.findIndex((element) => element.id === elementId);
+      if (sourceIndex < 0) return page;
+      const [moved] = ordered.splice(sourceIndex, 1);
+      const targetIndex = ordered.findIndex((element) => element.id === targetElementId);
+      if (targetIndex < 0) return page;
+      const insertionIndex = targetIndex + (position === "after" ? 1 : 0);
+      ordered.splice(clamp(insertionIndex, 0, ordered.length), 0, moved);
+      return applyLayerOrder(page, ordered);
+    });
+  };
+
+  const toggleElementVisibility = (elementId: string) => {
+    if (!isResearch || currentPage.kind === "cover") return;
+    const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
+    if (!element) return;
+    const hidden = element.hidden !== true;
+    const visualRequirement = element.type === "image" || element.type === "motion"
+      ? getVisualRequirement(currentPage, element)
+      : undefined;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (candidate) => ({ ...candidate, hidden })));
+    if (hidden && selectedId === elementId) {
+      setEditingTextId(null);
+      if (visualRequirement) setCanvasRequirementMode(visualRequirement.id, null);
+      setTextSelection(null);
+    }
   };
 
   const updatePlaybackDisplayMode = (elementId: string, displayMode: PlaybackDisplayMode) => {
@@ -1063,6 +1508,9 @@ export function AnimationBookEditor() {
     const target = event.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
     if (event.key === "Escape") {
+      const selectedVisualRequirement = selectedElement && (selectedElement.type === "image" || selectedElement.type === "motion")
+        ? getVisualRequirement(currentPage, selectedElement)
+        : undefined;
       if (showBasicInfo) {
         setShowBasicInfo(false);
       } else if (pendingPageDelete) {
@@ -1071,8 +1519,8 @@ export function AnimationBookEditor() {
         setPendingAnnotationDelete(null);
       } else if (pendingDelete) {
         setPendingDelete(null);
-      } else if (activeRequirement) {
-        setActiveRequirement(null);
+      } else if (selectedVisualRequirement && canvasRequirementModes[selectedVisualRequirement.id]) {
+        setCanvasRequirementMode(selectedVisualRequirement.id, null);
       } else if (editingTextId) {
         setEditingTextId(null);
       } else {
@@ -1080,13 +1528,13 @@ export function AnimationBookEditor() {
       }
       return;
     }
-    if (isResearch && (event.key === "Delete" || event.key === "Backspace") && selectedId) {
+    if (isResearch && currentPage.kind === "page" && (event.key === "Delete" || event.key === "Backspace") && selectedId) {
       event.preventDefault();
       requestRemoveElement(selectedId);
     }
   };
 
-  const isContextPanel = isResearch && (
+  const isContextPanel = (panelTab === "question" && Boolean(currentQuestion)) || currentPage.kind === "page" && isResearch && (
     panelTab === "voice" || panelTab === "word" || panelTab === "sentence" || panelTab === "note" || panelTab === "standard" || panelTab === "playback"
   );
 
@@ -1218,22 +1666,35 @@ export function AnimationBookEditor() {
                       {isResearch && <span className="ab-tool-divider" />}
                       <div className="ab-editor-toolbar-group">
                         <ToolButton icon={<MousePointer2 size={18} />} label="选择" displayLabel="选择" active={!isTextToolActive} />
-                        {isResearch ? (
+                        {isResearch && currentPage.kind === "page" ? (
                           <>
                             <ToolButton icon={<Type size={18} />} label="添加文本" displayLabel="文字" active={isTextToolActive} onClick={addText} />
                             <ToolButton icon={<ImageIcon size={18} />} label="添加图片占位" displayLabel="图片" onClick={addImagePlaceholder} />
                             <ToolButton icon={<Film size={18} />} label="添加动效占位" displayLabel="动效" onClick={addMotion} />
                             <ToolButton icon={<MessageCircle size={18} />} label="添加对话气泡" displayLabel="对话" onClick={addBubble} />
                             <span className="ab-tool-divider" />
-                            <ToolButton icon={<Gamepad2 size={18} />} label="标准互动（暂未开放）" displayLabel="题" disabled />
-                            <ToolButton icon={<Hand size={18} />} label="互动（暂未开放）" displayLabel="互动" disabled />
+                            <ToolButton
+                              icon={<Gamepad2 size={18} />}
+                              label={hasQuestion ? "查看或编辑题目" : "添加标准选择题"}
+                              displayLabel="题"
+                              active={panelTab === "question"}
+                              disabled={currentPage.kind !== "page"}
+                              onClick={addQuestion}
+                            />
+                            <ToolButton
+                              icon={<Hand size={18} />}
+                              label={hasQuestion ? "互动入口已被题占用" : "互动（下一版本开放）"}
+                              displayLabel="互动"
+                              disabled={currentPage.kind !== "page" || hasQuestion}
+                              onClick={addInteraction}
+                            />
                           </>
-                        ) : (
+                        ) : !isResearch ? (
                           <>
                             <span className="ab-tool-divider" />
                             <ToolButton icon={<ClipboardList size={18} />} label="查看制作需求" displayLabel="制作需求" active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} />
                           </>
-                        )}
+                        ) : null}
                       </div>
                       {isResearch && (
                         <div className="ab-editor-toolbar-settings">
@@ -1256,14 +1717,26 @@ export function AnimationBookEditor() {
                     </div>
                   </div>
 
+                  {currentPage.kind === "cover" && (
+                    <CoverLayoutConfig
+                      layout={book.coverLayout}
+                      research={isResearch}
+                      onChange={changeCoverLayout}
+                    />
+                  )}
+
                   <div className="ab-canvas-shadow">
                 <div
                   ref={canvasRef}
                   className={`ab-canvas ab-canvas--${currentPage?.kind ?? "page"}`}
                   style={{ backgroundColor: currentPage?.backgroundColor ?? "#fefcf8" }}
+                  onPointerDown={(event) => {
+                    if ((event.target as HTMLElement).closest(".ab-canvas-requirement")) return;
+                    finishActiveCanvasRequirementEdit();
+                  }}
                   onClick={() => {
+                    finishActiveCanvasRequirementEdit();
                     setSelectedId(null);
-                    setActiveRequirement(null);
                     setEditingTextId(null);
                     setTextSelection(null);
                     setSelectedAnnotationId(null);
@@ -1271,90 +1744,180 @@ export function AnimationBookEditor() {
                   onPointerMove={handleCanvasPointerMove}
                   onPointerUp={endPointerDrag}
                   onPointerCancel={endPointerDrag}
-                >
+                  >
                   {showSafeArea && <SafeAreaOverlay />}
-                  {currentPage?.kind === "cover" && (
-                    <div className={`ab-cover-layout-hint ab-cover-layout-hint--${book.coverLayout}`} aria-hidden="true" />
-                  )}
                   {sortedElements.map((element) => {
+                    const isVisualElement = element.type === "image" || element.type === "motion";
                     const elementRequirement = element.type === "image" || element.type === "motion"
                       ? getVisualRequirement(currentPage, element)
                       : undefined;
+                    const requirementMode = elementRequirement
+                      ? canvasRequirementModes[elementRequirement.id]
+                      : undefined;
                     return (
-                      <CanvasElement
-                        key={element.id}
-                        element={element}
-                        selected={selectedId === element.id}
-                        editing={editingTextId === element.id}
-                        canEditText={isResearch}
-                        canEditGeometry={isResearch || ["image", "motion", "bubble"].includes(element.type)}
-                        requirement={elementRequirement}
-                        requirementMode={activeRequirement?.mode}
-                        requirementOpen={Boolean(elementRequirement && activeRequirement?.id === elementRequirement.id)}
-                        onToggleRequirement={() => toggleElementRequirement(element)}
-                        onUpdateRequirement={(brief) => {
-                          if (elementRequirement) updateCanvasRequirement(elementRequirement.id, brief);
-                        }}
-                        onFinishRequirementEdit={() => {
-                          if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
-                        }}
-                        onSelect={() => selectElement(element.id)}
-                        textSelection={textSelection?.elementId === element.id ? textSelection : undefined}
-                        annotations={isResearch && element.type === "text" ? element.annotations : []}
-                        onTextSelectionChange={(range) => handleTextSelection(element.id, range)}
-                        onRequestDeleteAnnotation={isResearch ? requestRemoveAnnotation : undefined}
-                        onBeginTextEdit={() => {
-                          selectElement(element.id);
-                          if (element.type === "text" || element.type === "bubble") setEditingTextId(element.id);
-                        }}
-                        onTextChange={(content) => {
-                          if (element.type === "text") updateTextContent(element.id, content);
-                          else updateElementById(element.id, { content });
-                        }}
-                        onEndTextEdit={() => setEditingTextId(null)}
-                        onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
-                      />
+                      <Fragment key={element.id}>
+                        {currentPage.kind === "cover" && element.type === "text" && element.coverField ? (
+                          <CoverTextSlot
+                            element={element}
+                            selected={selectedId === element.id}
+                            editing={editingTextId === element.id}
+                            research={isResearch}
+                            onSelect={() => selectElement(element.id)}
+                            onBeginEdit={() => {
+                              selectElement(element.id);
+                              if (isResearch) setEditingTextId(element.id);
+                            }}
+                            onChange={(content) => updateTextContent(element.id, content)}
+                            onEndEdit={() => setEditingTextId(null)}
+                          />
+                        ) : currentPage.kind === "cover" && (element.type === "image" || element.type === "motion") ? (
+                          <CoverMediaElement
+                            element={element}
+                            layout={book.coverLayout}
+                            selected={selectedId === element.id}
+                            research={isResearch}
+                            onSelect={() => selectElement(element.id)}
+                            onRequestUpload={() => requestCoverMediaUpload(element.id)}
+                            onDelete={() => element.type === "image" ? clearImageAsset(element.id) : clearMotionAsset(element.id)}
+                            onChangeMedia={changeCoverMedia}
+                          />
+                        ) : (
+                          <CanvasElement
+                            element={element}
+                            selected={selectedId === element.id}
+                            editing={editingTextId === element.id}
+                            canEditText={isResearch && currentPage.kind === "page"}
+                            isBodyText={currentPage?.kind === "page"}
+                            autoHeightResizeActive={autoHeightElementId === element.id}
+                            canEditGeometry={currentPage.kind === "page" && element.type !== "question" && (isResearch || ["image", "motion", "bubble"].includes(element.type))}
+                            canUploadImage={!isResearch && element.type === "image"}
+                            onRequestImageUpload={() => requestImageUpload(element.id)}
+                            onDeleteImage={() => clearImageAsset(element.id)}
+                            onSelect={() => selectElement(element.id)}
+                            textSelection={textSelection?.elementId === element.id ? textSelection : undefined}
+                            annotations={isResearch && element.type === "text" ? element.annotations : []}
+                            onTextSelectionChange={(range) => handleTextSelection(element.id, range)}
+                            onRequestDeleteAnnotation={isResearch ? requestRemoveAnnotation : undefined}
+                            onSelectAnnotation={isResearch ? selectAnnotation : undefined}
+                            onBeginTextEdit={() => {
+                              selectElement(element.id);
+                              if (element.type === "text" || element.type === "bubble") setEditingTextId(element.id);
+                            }}
+                            onTextChange={(content) => {
+                              if (element.type === "text") updateTextContent(element.id, content);
+                              else updateElementById(element.id, { content });
+                            }}
+                            onEndTextEdit={() => setEditingTextId(null)}
+                            onAutoHeightChange={(height) => updateElementGeometry(element.id, { height })}
+                            onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
+                          />
+                        )}
+                        {isVisualElement && (
+                          <div
+                            className="ab-canvas-requirement-layer"
+                            style={{
+                              left: `${(element.x / CANVAS_WIDTH) * 100}%`,
+                              top: `${(element.y / CANVAS_HEIGHT) * 100}%`,
+                              width: `${(element.width / CANVAS_WIDTH) * 100}%`,
+                              height: `${(element.height / CANVAS_HEIGHT) * 100}%`,
+                              zIndex: selectedId === element.id
+                                ? 10000
+                                : element.zIndex + 1000,
+                            }}
+                          >
+                            <CanvasRequirement
+                              elementType={element.type}
+                              requirement={elementRequirement}
+                              mode={requirementMode}
+                              canEdit={isResearch}
+                              onToggle={() => toggleElementRequirement(element)}
+                              onChange={(brief) => {
+                                if (elementRequirement) updateCanvasRequirement(elementRequirement.id, brief);
+                              }}
+                              onEdit={() => {
+                                if (elementRequirement && isResearch) setCanvasRequirementMode(elementRequirement.id, "editing");
+                              }}
+                              onFinishEditing={() => {
+                                if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </Fragment>
                     );
                   })}
-                  {isResearch && selectedElement?.type === "text" && editingTextId === selectedElement.id && (
+                  <input
+                    ref={imageUploadInputRef}
+                    className="ab-hidden-input"
+                    type="file"
+                    accept="image/*"
+                    aria-label="上传图片"
+                    onChange={handleImageUploadChange}
+                  />
+                  <input
+                    ref={coverMediaUploadInputRef}
+                    className="ab-hidden-input"
+                    type="file"
+                    accept={coverMediaUploadAccept}
+                    aria-label="上传封面媒体"
+                    onChange={handleCoverMediaUploadChange}
+                  />
+                  {isResearch && currentPage.kind === "page" && selectedElement?.type === "text" && editingTextId === selectedElement.id && (
                     <TextFormatToolbar
                       element={selectedElement}
                       onUpdate={(patch) => updateElementById(selectedElement.id, patch)}
                       onMark={addTextAnnotation}
                     />
                   )}
-                  {isResearch && (
-                    <button
-                      type="button"
-                      className="ab-canvas-layer-trigger"
-                      aria-label="打开图层顺序"
-                      title="图层顺序"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setPanelTab("layers");
-                      }}
-                    >
-                      <Layers3 size={14} aria-hidden="true" />
-                    </button>
+                  {isResearch && currentPage.kind === "page" && (
+                    <>
+                      {isLayerPanelOpen && (
+                        <LayersPanel
+                          elements={layerElements}
+                          selectedId={selectedId}
+                          onSelect={selectElement}
+                          onMove={moveLayer}
+                          onReorder={reorderLayer}
+                          onToggleVisibility={toggleElementVisibility}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className="ab-canvas-layer-trigger"
+                        aria-expanded={isLayerPanelOpen}
+                        aria-controls="ab-canvas-layer-panel"
+                        aria-label={isLayerPanelOpen ? "收起图层顺序" : "展开图层顺序"}
+                        title={isLayerPanelOpen ? "收起图层顺序" : "展开图层顺序"}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setIsLayerPanelOpen((open) => !open);
+                        }}
+                      >
+                        <Layers3 size={18} aria-hidden="true" />
+                      </button>
+                    </>
                   )}
                   {currentPage?.kind === "page" && (
-                    <div className="ab-canvas-page-number">{pageIndex + 1}/{book.pages.length}</div>
+                    <div className="ab-canvas-page-meta" aria-label={`正文页 ${pageIndex + 1}/${book.pages.length}${currentQuestion ? "，包含题目" : ""}`}>
+                      <span className="ab-canvas-page-number">{pageIndex + 1}/{book.pages.length}</span>
+                      {currentQuestion && <span className="ab-canvas-question-badge" aria-label="本页包含题目">题</span>}
+                    </div>
                   )}
                   <div className="ab-canvas-grid-label" aria-hidden="true">640 × 360</div>
                 </div>
                   </div>
-                  <div className="ab-canvas-footnote">
-                    <span><PanelLeft size={13} /> 生产态编辑区</span>
-                  </div>
                 </div>
 
-                <div className="ab-editor-panel">
+                <div className={`ab-editor-panel${currentPage.kind === "cover" ? " ab-editor-panel--cover" : ""}`}>
               {isContextPanel ? (
                 <TextAnnotationPanel
                   activeTab={panelTab}
                   annotations={currentAnnotations}
                   selectedAnnotationId={selectedAnnotationId}
-                  standardInteractionCount={1}
+                  standardInteractionCount={isResearch ? 1 : 0}
+                  question={currentQuestion}
+                  questionOnly={!isResearch}
+                  canEditQuestion={isResearch}
                   voiceItems={currentVoiceItems}
                   elements={currentPage.elements}
                   playbackOrder={currentPlaybackOrder}
@@ -1362,37 +1925,38 @@ export function AnimationBookEditor() {
                   onUpdatePlaybackDisplayMode={updatePlaybackDisplayMode}
                   onMovePlaybackOrder={movePlaybackOrderItem}
                   onReorderPlaybackOrder={reorderPlaybackOrder}
-                  onSelectAnnotation={selectAnnotation}
-                  onUpdateAnnotation={updateAnnotation}
+                        onSelectAnnotation={selectAnnotation}
+                        onUpdateAnnotation={updateAnnotation}
                   onQuickFill={quickFillAnnotationVoice}
+                  onUpdateVoiceSupplement={updateVoiceSupplement}
+                  onUpdateQuestion={updateQuestion}
+                  onUpdateQuestionOption={updateQuestionOption}
+                  onAddQuestionOption={addQuestionOption}
+                  onRemoveQuestionOption={removeQuestionOption}
                 />
               ) : (
                 <>
-                  {!isResearch && <div className="ab-panel-tabs" role="tablist" aria-label="编辑设置">
+                  {!isResearch && currentPage.kind === "page" && <div className="ab-panel-tabs" role="tablist" aria-label="编辑设置">
                     <PanelTabButton active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} label="制作需求" count={currentPage?.requirements.length} />
+                    {currentQuestion && <PanelTabButton active={panelTab === "question"} onClick={() => selectAnnotationTab("question")} label="题" count={1} />}
                   </div>}
 
-                  {panelTab === "properties" && (
-                    <PropertiesPanel
+                  {currentPage.kind === "cover" && <CoverAudioPanel
+                      research={isResearch}
+                      requirement={currentPage.requirements.find((item) => item.type === "audio")}
+                      onChange={(brief) => updateRequirement(currentPage.requirements.find((item) => item.type === "audio")?.id ?? "", { brief })}
+                      onSupplement={(brief) => updateRequirement(currentPage.requirements.find((item) => item.type === "audio")?.id ?? "", { supplementalBrief: brief })}
+                      onUpload={(file) => { const requirement = currentPage.requirements.find((item) => item.type === "audio"); if (requirement) handleRequirementUpload(requirement.id, file); }}
+                    />}
+                  {currentPage.kind === "page" && panelTab === "properties" && <PropertiesPanel
                       page={currentPage}
                       selectedId={selectedId}
                       onSelectElement={selectElement}
-                      coverLayout={book.coverLayout}
-                      onCoverLayoutChange={(coverLayout) => { if (isResearch) setBook((previous) => ({ ...previous, coverLayout })); }}
                       onUpdateElement={updateElementById}
                       onRemoveElement={requestRemoveElement}
                       onRequestAudioUpload={requestAudioUpload}
-                    />
-                  )}
-                  {panelTab === "layers" && (
-                    <LayersPanel
-                      elements={layerElements}
-                      selectedId={selectedId}
-                      onSelect={selectElement}
-                      onMove={moveLayer}
-                    />
-                  )}
-                  {!isResearch && panelTab === "requirements" && (
+                    />}
+                  {!isResearch && currentPage.kind === "page" && panelTab === "requirements" && (
                     <RequirementsPanel
                       page={currentPage}
                       role={role}
@@ -1436,7 +2000,7 @@ export function AnimationBookEditor() {
             <div className="ab-confirm-icon"><AlertCircle size={18} /></div>
             <div className="ab-confirm-copy">
               <h2 id="ab-delete-title">确认删除{getElementLabel(pendingDelete.type)}？</h2>
-              <p>当前内容“{pendingDelete.name}”已填充，删除后需要重新添加。</p>
+              <p>{pendingDelete.type === "question" ? "删除后题干、选项及题目配置将一并移除，请确认是否继续。" : `当前内容“${pendingDelete.name}”已填充，删除后需要重新添加。`}</p>
             </div>
             <div className="ab-confirm-actions">
               <button type="button" className="ab-secondary-button" autoFocus onClick={() => setPendingDelete(null)}>取消</button>
@@ -1778,51 +2342,71 @@ function SafeAreaOverlay() {
   );
 }
 
+const getCanvasTextStyle = (element: TextElement, isBodyText: boolean) => ({
+  ...(isBodyText ? {
+    fontFamily: BODY_TEXT_FONT_FAMILY,
+    lineHeight: "24px",
+    textIndent: BODY_TEXT_PARAGRAPH_INDENT,
+  } : {}),
+  fontSize: (element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)) + "px",
+  color: element.color,
+  fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
+  fontStyle: element.italic ? "italic" : "normal",
+  textDecoration: element.underline ? "underline" : "none",
+  textAlign: element.textAlign ?? "left",
+});
+
 function CanvasElement({
   element,
   selected,
   editing,
   canEditText,
+  isBodyText,
+  autoHeightResizeActive,
   canEditGeometry,
-  requirement,
-  requirementMode,
-  requirementOpen,
+  canUploadImage,
   annotations,
   textSelection,
   onSelect,
   onTextSelectionChange,
   onRequestDeleteAnnotation,
+  onSelectAnnotation,
   onBeginTextEdit,
   onTextChange,
   onEndTextEdit,
-  onToggleRequirement,
-  onUpdateRequirement,
-  onFinishRequirementEdit,
+  onAutoHeightChange,
+  onRequestImageUpload,
+  onDeleteImage,
   onPointerDown,
 }: {
   element: BookElement;
   selected: boolean;
   editing: boolean;
   canEditText: boolean;
+  isBodyText: boolean;
+  autoHeightResizeActive: boolean;
   canEditGeometry: boolean;
-  requirement?: ProductionRequirement;
-  requirementMode?: "editing" | "preview";
-  requirementOpen: boolean;
+  canUploadImage: boolean;
   annotations?: TextAnnotation[];
   textSelection?: TextSelectionRange;
   onSelect: () => void;
   onTextSelectionChange?: (range: TextSelectionRange | null) => void;
   onRequestDeleteAnnotation?: (annotationId: string) => void;
+  onSelectAnnotation?: (annotationId: string) => void;
   onBeginTextEdit: () => void;
   onTextChange: (content: string) => void;
   onEndTextEdit: () => void;
-  onToggleRequirement: () => void;
-  onUpdateRequirement: (brief: ProductionRequirement["brief"]) => void;
-  onFinishRequirementEdit: () => void;
+  onAutoHeightChange: (height: number) => void;
+  onRequestImageUpload: () => void;
+  onDeleteImage: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, mode: "move" | "resize" | "tail", corner?: ResizeCorner) => void;
 }) {
+  const elementRef = useRef<HTMLDivElement>(null);
   const textContentRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
+  const lastMeasuredWidthRef = useRef<number | null>(null);
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerMovedRef = useRef(false);
 
   useEffect(() => {
     if (!editing || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
@@ -1840,12 +2424,42 @@ function CanvasElement({
     selection.addRange(range);
   }, [editing, element.type, textSelection]);
 
+  useLayoutEffect(() => {
+    if (!autoHeightResizeActive) {
+      lastMeasuredWidthRef.current = element.type === "text" ? element.width : null;
+      return;
+    }
+    if (element.type !== "text" || !canEditGeometry || lastMeasuredWidthRef.current === element.width) return;
+    const canvas = elementRef.current?.closest<HTMLElement>(".ab-canvas");
+    const content = elementRef.current?.querySelector<HTMLElement>(".ab-canvas-text-content");
+    const canvasHeight = canvas?.getBoundingClientRect().height ?? 0;
+    if (!content || canvasHeight <= 0) return;
+
+    const previousHeight = content.style.height;
+    content.style.height = "auto";
+    const contentHeight = content.scrollHeight;
+    content.style.height = previousHeight;
+    lastMeasuredWidthRef.current = element.width;
+
+    const nextHeight = Math.max(54, Math.ceil(contentHeight * (CANVAS_HEIGHT / canvasHeight)));
+    if (Number.isFinite(nextHeight) && Math.abs(nextHeight - element.height) > 1) {
+      onAutoHeightChange(nextHeight);
+    }
+  }, [
+    autoHeightResizeActive,
+    canEditGeometry,
+    element.height,
+    element.type,
+    element.width,
+    onAutoHeightChange,
+  ]);
+
   const positionStyle = {
     left: `${(element.x / CANVAS_WIDTH) * 100}%`,
     top: `${(element.y / CANVAS_HEIGHT) * 100}%`,
     width: `${(element.width / CANVAS_WIDTH) * 100}%`,
     height: `${(element.height / CANVAS_HEIGHT) * 100}%`,
-    zIndex: requirementOpen ? element.zIndex + 1000 : element.zIndex,
+    zIndex: element.zIndex,
   };
   const editableContentProps = {
     ref: textContentRef,
@@ -1876,19 +2490,24 @@ function CanvasElement({
       }
     },
   };
-  const textStyle = element.type === "text" ? {
-    fontSize: `${element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)}px`,
-    color: element.color,
-    fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
-    fontStyle: element.italic ? "italic" : "normal",
-    textDecoration: element.underline ? "underline" : "none",
-    textAlign: element.textAlign ?? "left",
-  } as const : undefined;
+  const textStyle = element.type === "text" ? getCanvasTextStyle(element, isBodyText) : undefined;
   const baseProps = {
     className: `ab-canvas-element ab-canvas-element--${element.type}${selected ? " is-selected" : ""}`,
     style: positionStyle,
     onClick: (event: React.MouseEvent) => {
       event.stopPropagation();
+      const target = event.target as HTMLElement;
+      const moved = pointerMovedRef.current;
+      pointerStartRef.current = null;
+      pointerMovedRef.current = false;
+      if (moved || target.closest(".ab-resize-handle")) {
+        onSelect();
+        return;
+      }
+      if (element.type === "image" && canUploadImage) {
+        onRequestImageUpload();
+        return;
+      }
       onSelect();
     },
     onDoubleClick: (event: React.MouseEvent) => {
@@ -1896,19 +2515,29 @@ function CanvasElement({
       if ((element.type === "text" || element.type === "bubble") && canEditText) onBeginTextEdit();
     },
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
+      pointerStartRef.current = { x: event.clientX, y: event.clientY };
+      pointerMovedRef.current = false;
       if (((element.type === "text" || element.type === "bubble") && editing) || !canEditGeometry) {
         event.stopPropagation();
         return;
       }
       onPointerDown(event, "move");
     },
+    onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
+      const start = pointerStartRef.current;
+      if (!start) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) pointerMovedRef.current = true;
+    },
     tabIndex: 0,
     role: "button" as const,
     "aria-label": `${getElementLabel(element.type)}：${elementName(element)}`,
   };
+  const resizeCorners: ResizeCorner[] = element.type === "text"
+    ? ["top-left", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-right"]
+    : ["top-left", "top-right", "bottom-left", "bottom-right"];
 
   return (
-    <div {...baseProps}>
+    <div ref={elementRef} {...baseProps}>
       {element.type === "text" && (
         editing ? (
           <div {...editableContentProps} className="ab-canvas-text-content" style={textStyle}>
@@ -1917,24 +2546,33 @@ function CanvasElement({
         ) : (
           <AnnotatedTextContent
             element={element}
+            isBodyText={isBodyText}
             annotations={annotations ?? element.annotations}
             onRequestDelete={onRequestDeleteAnnotation}
+            onSelectAnnotation={onSelectAnnotation}
           />
         )
       )}
       {element.type === "image" && (
         <>
           <span className="ab-canvas-element-tag ab-canvas-element-tag--image">图片</span>
-          {element.src ? <img className="ab-canvas-image" src={element.src} alt={element.alt} style={{ objectFit: element.objectFit }} /> : <div className="ab-canvas-asset-placeholder"><FileImage size={21} /><span>{element.alt || "待制作图片"}</span></div>}
-          <CanvasRequirement
-            elementType="image"
-            requirement={requirement}
-            mode={requirementOpen ? requirementMode : undefined}
-            canEdit={canEditText}
-            onToggle={onToggleRequirement}
-            onChange={onUpdateRequirement}
-            onFinishEditing={onFinishRequirementEdit}
-          />
+          {element.src ? <img className="ab-canvas-image" src={element.src} alt={element.alt} style={{ objectFit: "contain" }} /> : <div className="ab-canvas-asset-placeholder"><FileImage size={21} /><span>{element.alt || "待制作图片"}</span></div>}
+          {canUploadImage && (
+            <div
+              className="ab-image-hover-actions"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button type="button" aria-label="上传图片" title="上传图片" onClick={onRequestImageUpload}>
+                <Upload size={18} aria-hidden="true" />
+              </button>
+              {element.src && (
+                <button type="button" aria-label="删除图片" title="删除图片" onClick={onDeleteImage}>
+                  <Trash2 size={18} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
       {element.type === "motion" && (
@@ -1945,17 +2583,9 @@ function CanvasElement({
             <span>{element.src ? "动效静态占位" : "待上传动效"}</span>
             <small>{element.fileName}</small>
           </div>
-          <CanvasRequirement
-            elementType="motion"
-            requirement={requirement}
-            mode={requirementOpen ? requirementMode : undefined}
-            canEdit={canEditText}
-            onToggle={onToggleRequirement}
-            onChange={onUpdateRequirement}
-            onFinishEditing={onFinishRequirementEdit}
-          />
         </>
       )}
+      {element.type === "question" && <QuestionCanvas element={element} />}
       {element.type === "bubble" && (
         <>
           <div
@@ -1975,10 +2605,9 @@ function CanvasElement({
           />
         </>
       )}
-      {selected && (
+      {selected && element.type !== "question" && (
         <>
-          <div className="ab-selection-label">{getElementLabel(element.type)}{!canEditGeometry ? " · 只读" : ""}</div>
-          {canEditGeometry && (["top-left", "top-right", "bottom-left", "bottom-right"] as ResizeCorner[]).map((corner) => (
+          {canEditGeometry && resizeCorners.map((corner) => (
             <span
               key={corner}
               className={`ab-resize-handle ab-resize-handle--${corner}`}
@@ -1992,25 +2621,42 @@ function CanvasElement({
   );
 }
 
+function QuestionCanvas({ element }: { element: QuestionElement }) {
+  return (
+    <div className="ab-question-canvas-card" aria-label="题目画布预览">
+      <div className="ab-question-canvas-stem">
+        <FileAudio size={13} aria-hidden="true" />
+        <span className={element.stem.trim() ? "is-filled" : ""}>{element.stem.trim() || "暂无内容"}</span>
+      </div>
+      <div className="ab-question-canvas-divider" />
+      <div className="ab-question-canvas-options">
+        {element.options.map((option, index) => (
+          <div className={`ab-question-canvas-option${option.isCorrect ? " is-correct" : ""}`} key={option.id}>
+            <span className="ab-question-canvas-option-label">{String.fromCharCode(65 + index)}</span>
+            <span className={`ab-question-canvas-option-content${option.content.trim() ? " is-filled" : ""}`}>{option.content.trim() || "暂无内容"}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AnnotatedTextContent({
   element,
+  isBodyText,
   annotations,
   onRequestDelete,
+  onSelectAnnotation,
 }: {
   element: TextElement;
+  isBodyText: boolean;
   annotations: TextAnnotation[];
   onRequestDelete?: (annotationId: string) => void;
+  onSelectAnnotation?: (annotationId: string) => void;
 }) {
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
   const segments = buildAnnotationSegments(element.content, annotations);
-  const style = {
-    fontSize: `${element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)}px`,
-    color: element.color,
-    fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
-    fontStyle: element.italic ? "italic" : "normal",
-    textDecoration: element.underline ? "underline" : "none",
-    textAlign: element.textAlign ?? "left",
-  } as const;
+  const style = getCanvasTextStyle(element, isBodyText);
 
   return (
     <div className="ab-canvas-text-content ab-canvas-text-rendered" style={style}>
@@ -2028,12 +2674,22 @@ function AnnotatedTextContent({
         const controls = segment.annotations.filter((annotation) => annotation.start === segment.start);
         const hoveredControl = segment.annotations.find((annotation) => annotation.id === hoveredAnnotationId);
         const visibleControls = controls.length > 0 ? controls : hoveredControl ? [hoveredControl] : [];
+        const firstAnnotation = segment.annotations[0];
+        const isClickable = Boolean(firstAnnotation && onSelectAnnotation);
         return (
           <span
             key={`${segment.start}-${segment.end}`}
-            className="ab-annotation-segment"
+            className={`ab-annotation-segment${isClickable ? " is-clickable" : ""}`}
             onMouseEnter={() => setHoveredAnnotationId(controls[0]?.id ?? segment.annotations[0]?.id ?? null)}
             onMouseLeave={() => setHoveredAnnotationId(null)}
+            onPointerDown={(event) => {
+              if (isClickable) event.stopPropagation();
+            }}
+            onClick={(event) => {
+              if (!isClickable || !firstAnnotation) return;
+              event.stopPropagation();
+              onSelectAnnotation?.(firstAnnotation.id);
+            }}
           >
             {decorated}
             {hoveredAnnotationId && segment.annotations.some((annotation) => annotation.id === hoveredAnnotationId) && visibleControls.length > 0 && (
@@ -2070,6 +2726,7 @@ function CanvasRequirement({
   canEdit,
   onToggle,
   onChange,
+  onEdit,
   onFinishEditing,
 }: {
   elementType: "image" | "motion";
@@ -2078,6 +2735,7 @@ function CanvasRequirement({
   canEdit: boolean;
   onToggle: () => void;
   onChange: (brief: ProductionRequirement["brief"]) => void;
+  onEdit: () => void;
   onFinishEditing: () => void;
 }) {
   const brief = requirement?.brief ?? { html: "", text: "" };
@@ -2095,6 +2753,18 @@ function CanvasRequirement({
         if (!nextTarget || !event.currentTarget.contains(nextTarget)) onFinishEditing();
       }}
     >
+      <button
+        type="button"
+        className="ab-canvas-requirement-toggle"
+        aria-expanded={Boolean(mode)}
+        aria-label={`${elementType === "image" ? "图片" : "动效"}需求`}
+        onPointerDown={(event) => event.preventDefault()}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onToggle}
+      >
+        <span>需求</span>
+        {mode ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+      </button>
       {isEditing ? (
         <RequirementRichText
           value={brief}
@@ -2103,22 +2773,26 @@ function CanvasRequirement({
           placeholder={elementType === "image" ? "输入图片需求..." : "输入动效需求..."}
           autoFocus
         />
-      ) : mode === "preview" && hasBrief ? (
-        <div className="ab-canvas-requirement-preview">
-          <RichTextPreview value={brief} />
+      ) : mode === "preview" ? (
+        <div
+          className={`ab-canvas-requirement-preview${canEdit ? " ab-canvas-requirement-preview--interactive" : ""}`}
+          role={canEdit ? "button" : undefined}
+          tabIndex={canEdit ? 0 : undefined}
+          aria-label={canEdit ? `编辑${elementType === "image" ? "图片" : "动效"}需求` : undefined}
+          onKeyDown={(event) => {
+            if (!canEdit || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            event.currentTarget.blur();
+            onEdit();
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (canEdit) onEdit();
+          }}
+        >
+          {hasBrief ? <RichTextPreview value={brief} /> : <span className="ab-canvas-requirement-empty">未填写需求</span>}
         </div>
       ) : null}
-      <button
-        type="button"
-        className="ab-canvas-requirement-toggle"
-        aria-expanded={Boolean(mode)}
-        aria-label={`${elementType === "image" ? "图片" : "动效"}需求`}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={onToggle}
-      >
-        <span>需求</span>
-        {mode ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-      </button>
     </div>
   );
 }
@@ -2165,12 +2839,384 @@ function TextFormatToolbar({
   );
 }
 
+const COVER_TEXT_FIELD_LABELS: Record<CoverTextField, string> = {
+  title: "标题",
+  topic: "绘本主题",
+  wordCount: "阅读字数",
+  fiction: "虚构/非虚构",
+};
+
+const COVER_TEXT_FIELD_PLACEHOLDERS: Record<CoverTextField, string> = {
+  title: "请输入标题",
+  topic: "请输入绘本主题",
+  wordCount: "请输入阅读字数",
+  fiction: "请输入类型",
+};
+
+function CoverLayoutConfig({
+  layout,
+  research,
+  onChange,
+}: {
+  layout: CoverLayout;
+  research: boolean;
+  onChange: (layout: CoverLayout) => void;
+}) {
+  return (
+    <div className={`ab-cover-layout-config${research ? "" : " is-readonly"}`}>
+      <span className="ab-cover-layout-config__label">封面布局</span>
+      {research ? (
+        <div className="ab-cover-layout-config__control" role="group" aria-label="封面布局">
+          <button type="button" className={layout === "split" ? "is-active" : ""} aria-pressed={layout === "split"} onClick={() => onChange("split")}>左右布局</button>
+          <button type="button" className={layout === "fullscreen" ? "is-active" : ""} aria-pressed={layout === "fullscreen"} onClick={() => onChange("fullscreen")}>全屏布局</button>
+        </div>
+      ) : (
+        <span className="ab-cover-layout-config__readonly-value">{layout === "split" ? "左右布局" : "全屏布局"} · 只读</span>
+      )}
+    </div>
+  );
+}
+
+function CoverTextSlot({
+  element,
+  selected,
+  editing,
+  research,
+  onSelect,
+  onBeginEdit,
+  onChange,
+  onEndEdit,
+}: {
+  element: TextElement;
+  selected: boolean;
+  editing: boolean;
+  research: boolean;
+  onSelect: () => void;
+  onBeginEdit: () => void;
+  onChange: (content: string) => void;
+  onEndEdit: () => void;
+}) {
+  const field = element.coverField;
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isComposingRef = useRef(false);
+  const value = element.content;
+
+  useEffect(() => {
+    if (!editing || !research || !contentRef.current) return;
+    contentRef.current.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(contentRef.current);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, [editing, research]);
+
+  useEffect(() => {
+    if (!contentRef.current || editing) return;
+    if (contentRef.current.textContent !== value) contentRef.current.textContent = value;
+  }, [editing, value]);
+
+  if (!field) return null;
+  const geometry = COVER_TEXT_GEOMETRY[field];
+  const isTitle = field === "title";
+
+  const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
+    const nativeEvent = event.nativeEvent as InputEvent;
+    if (isComposingRef.current || nativeEvent.isComposing) return;
+    onChange(event.currentTarget.textContent ?? "");
+  };
+
+  const content = (
+    <div
+      ref={contentRef}
+      className="ab-cover-text-value"
+      contentEditable={editing && research}
+      suppressContentEditableWarning
+      data-placeholder={COVER_TEXT_FIELD_PLACEHOLDERS[field]}
+      onCompositionStart={() => { isComposingRef.current = true; }}
+      onCompositionEnd={(event: React.CompositionEvent<HTMLDivElement>) => {
+        isComposingRef.current = false;
+        onChange(event.currentTarget.textContent ?? "");
+      }}
+      onInput={handleInput}
+      onBlur={onEndEdit}
+      onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
+        event.stopPropagation();
+        if (event.key === "Escape" || event.key === "Enter") {
+          event.preventDefault();
+          onEndEdit();
+        }
+      }}
+    >
+      {value}
+    </div>
+  );
+
+  return (
+    <div
+      className={`ab-cover-text-slot ab-cover-text-slot--${field}${selected ? " is-selected" : ""}${!value.trim() ? " is-empty" : ""}${editing ? " is-editing" : ""}`}
+      style={{
+        left: `${(geometry.x / CANVAS_WIDTH) * 100}%`,
+        top: `${(geometry.y / CANVAS_HEIGHT) * 100}%`,
+        width: `${(geometry.width / CANVAS_WIDTH) * 100}%`,
+        height: `${(geometry.height / CANVAS_HEIGHT) * 100}%`,
+        zIndex: 4,
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`封面${COVER_TEXT_FIELD_LABELS[field]}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect();
+      }}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        if (research) onBeginEdit();
+      }}
+      onKeyDown={(event) => {
+        if (!editing && research && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onBeginEdit();
+        }
+      }}
+    >
+      {isTitle ? content : (
+        <div className="ab-cover-text-meta-row">
+          <span className="ab-cover-text-bullet" aria-hidden="true" />
+          <span className="ab-cover-text-label">{COVER_TEXT_FIELD_LABELS[field]}</span>
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoverMediaElement({
+  element,
+  layout,
+  selected,
+  research,
+  onSelect,
+  onRequestUpload,
+  onDelete,
+  onChangeMedia,
+}: {
+  element: ImageElement | MotionElement;
+  layout: CoverLayout;
+  selected: boolean;
+  research: boolean;
+  onSelect: () => void;
+  onRequestUpload: () => void;
+  onDelete: () => void;
+  onChangeMedia: (type: "image" | "motion") => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const isImage = element.type === "image";
+  const mediaType = isImage ? "image" : "motion";
+  const geometry = layout === "split" ? COVER_SPLIT_IMAGE : COVER_FULLSCREEN_MEDIA;
+  const mediaSource = element.src;
+  const isVideoSource = !isImage && typeof mediaSource === "string" && (
+    mediaSource.startsWith("data:video/") || /\.(mp4|webm|mov)(?:$|\?)/i.test(mediaSource)
+  );
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setMenuOpen(false);
+    };
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", handleDocumentPointerDown);
+    document.addEventListener("keydown", handleDocumentKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handleDocumentPointerDown);
+      document.removeEventListener("keydown", handleDocumentKeyDown);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [layout, element.id]);
+
+  const media = element.src ? (
+    isVideoSource ? (
+      <video className="ab-cover-media-content" src={element.src} autoPlay loop muted playsInline aria-label="封面动效" />
+    ) : (
+      <img className="ab-cover-media-content" src={element.src} alt={isImage ? element.alt : "封面动效静态预览"} draggable={false} />
+    )
+  ) : (
+    <div className={`ab-cover-media-placeholder${isImage ? " is-image" : " is-motion"}`}>
+      {isImage ? <FileImage size={24} aria-hidden="true" /> : <ImagePlus size={24} aria-hidden="true" />}
+      <span>{isImage ? "待制作图片" : "待上传动效"}</span>
+    </div>
+  );
+
+  return (
+    <div
+      className={`ab-cover-media-element ab-cover-media-element--${layout}${selected ? " is-selected" : ""}`}
+      style={{
+        left: `${(geometry.x / CANVAS_WIDTH) * 100}%`,
+        top: `${(geometry.y / CANVAS_HEIGHT) * 100}%`,
+        width: `${(geometry.width / CANVAS_WIDTH) * 100}%`,
+        height: `${(geometry.height / CANVAS_HEIGHT) * 100}%`,
+        zIndex: element.zIndex,
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`封面${isImage ? "图片" : "动效"}`}
+      onPointerDown={(event) => {
+        if ((event.target as HTMLElement).closest("button")) return;
+        event.stopPropagation();
+        onSelect();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        if ((event.target as HTMLElement).closest("button")) return;
+        if (!research) onRequestUpload();
+        else onSelect();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (!research) onRequestUpload();
+          else onSelect();
+        }
+      }}
+    >
+      <div className="ab-cover-media-surface">{media}</div>
+      <div className={`ab-cover-media-tag ab-cover-media-tag--${mediaType}`}>
+        {layout === "fullscreen" ? (
+          <button
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded={menuOpen}
+            aria-label="切换封面媒体类型"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenuOpen((open) => !open);
+            }}
+          >
+            {isImage ? "图片" : "动效"}<ChevronDown size={14} aria-hidden="true" />
+          </button>
+        ) : <span>图片</span>}
+      </div>
+      {layout === "fullscreen" && menuOpen && (
+        <div ref={menuRef} className="ab-cover-media-menu" role="listbox" aria-label="封面媒体类型">
+          {(["image", "motion"] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              role="option"
+              aria-selected={mediaType === type}
+              className={mediaType === type ? "is-selected" : ""}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onChangeMedia(type);
+                setMenuOpen(false);
+              }}
+            >
+              {type === "image" ? "图片" : "动效"}
+            </button>
+          ))}
+        </div>
+      )}
+      {!research && (
+        <div
+          className="ab-cover-media-actions"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" aria-label={`上传${isImage ? "图片" : "动效"}`} title={`上传${isImage ? "图片" : "动效"}`} onClick={onRequestUpload}>
+            <Upload size={16} aria-hidden="true" />
+          </button>
+          {element.src && <button type="button" aria-label={`删除${isImage ? "图片" : "动效"}`} title={`删除${isImage ? "图片" : "动效"}`} onClick={onDelete}><Trash2 size={16} aria-hidden="true" /></button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoverAudioPanel({
+  research,
+  requirement,
+  onChange,
+  onSupplement,
+  onUpload,
+}: {
+  research: boolean;
+  requirement?: ProductionRequirement;
+  onChange: (brief: ProductionRequirement["brief"]) => void;
+  onSupplement: (brief: ProductionRequirement["brief"]) => void;
+  onUpload: (file: File) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [requirementOpen, setRequirementOpen] = useState(true);
+  const brief = requirement?.brief ?? { html: "", text: "" };
+  const supplement = requirement?.supplementalBrief ?? { html: "", text: "" };
+  return (
+    <div className="ab-cover-audio-panel">
+      {!open ? (
+        <button type="button" className="ab-cover-audio-trigger" aria-expanded={false} onClick={() => setOpen(true)}>
+          <Plus size={16} aria-hidden="true" />封面语音
+        </button>
+      ) : (
+        <section className="ab-cover-audio-module">
+          <div className="ab-cover-audio-module-header">
+            <strong>讲解语音</strong>
+            <button type="button" className="ab-cover-audio-close" aria-label="收起封面语音" title="收起封面语音" onClick={() => setOpen(false)}><X size={18} aria-hidden="true" /></button>
+          </div>
+          <div className="ab-cover-audio-media">
+            <span className="ab-cover-audio-tag">语音</span>
+            <label
+              className="ab-cover-audio-upload"
+              onDragOver={(event) => { if (!research) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
+              onDrop={(event) => {
+                if (research) return;
+                event.preventDefault();
+                const file = event.dataTransfer.files[0];
+                if (file) onUpload(file);
+              }}
+            >
+              <Upload size={24} aria-hidden="true" />
+              <span>点击或拖拽音频进行上传</span>
+              <input className="ab-hidden-input" type="file" accept="audio/*" disabled={research} onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.currentTarget.value = ""; }} />
+            </label>
+            <div className="ab-cover-audio-demand">
+              <button type="button" className="ab-cover-audio-demand-toggle" aria-expanded={requirementOpen} onClick={() => setRequirementOpen((value) => !value)}>
+                <span>需求</span>{requirementOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+              </button>
+              {requirementOpen && (
+                <div className="ab-cover-audio-demand-rows">
+                  <div className="ab-cover-audio-demand-row">
+                    <span className="ab-cover-audio-demand-label">需求</span>
+                    {research ? <RequirementRichText value={brief} onChange={onChange} className="ab-cover-audio-rich-text" placeholder="输入封面语音需求..." /> : <RichTextPreview value={brief} />}
+                  </div>
+                  <div className="ab-cover-audio-demand-row">
+                    <span className="ab-cover-audio-demand-label">补充</span>
+                    {research ? <RequirementRichText value={supplement} onChange={onSupplement} className="ab-cover-audio-rich-text" placeholder="输入补充需求..." /> : <RichTextPreview value={supplement} />}
+                  </div>
+                </div>
+              )}
+            </div>
+            {requirement?.status === "failed" && <div className="ab-upload-error"><AlertCircle size={14} />上传失败，可重试</div>}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function PropertiesPanel({
   page,
   selectedId,
   onSelectElement,
-  coverLayout,
-  onCoverLayoutChange,
   onUpdateElement,
   onRemoveElement,
   onRequestAudioUpload,
@@ -2178,8 +3224,6 @@ function PropertiesPanel({
   page: AnimationBookPage;
   selectedId: string | null;
   onSelectElement: (id: string) => void;
-  coverLayout: CoverLayout;
-  onCoverLayoutChange: (layout: CoverLayout) => void;
   onUpdateElement: (id: string, patch: Partial<BookElement>) => void;
   onRemoveElement: (id: string) => void;
   onRequestAudioUpload: () => void;
@@ -2196,16 +3240,6 @@ function PropertiesPanel({
         <span className="ab-panel-note">{contentElements.length} 个元素</span>
       </div>
 
-      {page.kind === "cover" && (
-        <section className="ab-setting-section">
-          <div className="ab-setting-label-row"><label>封面布局</label><span>封面不参与排序</span></div>
-          <div className="ab-segmented-control">
-            <button type="button" className={coverLayout === "split" ? "is-active" : ""} onClick={() => onCoverLayoutChange("split")}>左右布局</button>
-            <button type="button" className={coverLayout === "fullscreen" ? "is-active" : ""} onClick={() => onCoverLayoutChange("fullscreen")}>全屏布局</button>
-          </div>
-        </section>
-      )}
-
       <section className="ab-content-section">
         <div className="ab-content-section-heading">
           <div><strong>画布元素</strong><span>内容在画布中直接编辑，点击卡片可定位元素</span></div>
@@ -2217,6 +3251,7 @@ function PropertiesPanel({
             <ContentItem
               key={element.id}
               element={element}
+              isBodyText={page.kind === "page"}
               selected={selectedId === element.id}
               onSelect={() => onSelectElement(element.id)}
               onUpdate={(patch) => onUpdateElement(element.id, patch)}
@@ -2234,6 +3269,7 @@ function PropertiesPanel({
 
 function ContentItem({
   element,
+  isBodyText,
   selected,
   onSelect,
   onUpdate,
@@ -2241,14 +3277,16 @@ function ContentItem({
   onRequestAudioUpload,
 }: {
   element: BookElement;
+  isBodyText: boolean;
   selected: boolean;
   onSelect: () => void;
   onUpdate: (patch: Partial<BookElement>) => void;
   onRemove: () => void;
   onRequestAudioUpload: () => void;
 }) {
-  const icon = element.type === "text" ? <Type size={14} /> : element.type === "image" ? <FileImage size={14} /> : element.type === "motion" ? <Film size={14} /> : <MessageCircle size={14} />;
-  const label = element.type === "text" ? "文本" : element.type === "image" ? "图片" : element.type === "motion" ? "动效" : "气泡";
+  const icon = element.type === "text" ? <Type size={14} /> : element.type === "image" ? <FileImage size={14} /> : element.type === "motion" ? <Film size={14} /> : element.type === "question" ? <Gamepad2 size={14} /> : <MessageCircle size={14} />;
+  const label = element.type === "text" ? "文本" : element.type === "image" ? "图片" : element.type === "motion" ? "动效" : element.type === "question" ? "题" : "气泡";
+  const textSize = isBodyText ? "16px" : element.type === "text" ? element.fontSize + "px" : null;
 
   return (
     <article
@@ -2275,7 +3313,7 @@ function ContentItem({
         {element.type === "text" && (
           <>
             <p className="ab-content-card-copy">{element.content || "未填写文本"}</p>
-            <div className="ab-content-card-meta">画布内编辑 · {element.fontSize}px · {element.fontWeight === "bold" ? "加粗" : element.fontWeight === "medium" ? "中等" : "常规"}</div>
+            <div className="ab-content-card-meta">画布内编辑 · {textSize} · {element.fontWeight === "bold" ? "加粗" : element.fontWeight === "medium" ? "中等" : "常规"}{isBodyText ? " · 24px" : ""}</div>
             <AudioField hasAudio={Boolean(element.audioUrl)} onRequest={onRequestAudioUpload} label="文本语音" />
           </>
         )}
@@ -2308,6 +3346,13 @@ function ContentItem({
             <AudioField hasAudio={Boolean(element.audioUrl)} onRequest={onRequestAudioUpload} label="气泡语音" />
           </>
         )}
+
+        {element.type === "question" && (
+          <>
+            <p className="ab-content-card-copy">{element.stem || "未填写题干"}</p>
+            <div className="ab-content-card-meta">固定位置 · {element.options.length} 个选项 · 多选题</div>
+          </>
+        )}
       </div>
     </article>
   );
@@ -2326,22 +3371,145 @@ function AudioField({ hasAudio, onRequest, label }: { hasAudio: boolean; onReque
   );
 }
 
-function LayersPanel({ elements, selectedId, onSelect, onMove }: { elements: BookElement[]; selectedId: string | null; onSelect: (id: string) => void; onMove: (id: string, direction: "up" | "down" | "top" | "bottom") => void }) {
+function LayersPanel({
+  elements,
+  selectedId,
+  onSelect,
+  onMove,
+  onReorder,
+  onToggleVisibility,
+}: {
+  elements: BookElement[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onMove: (id: string, direction: "up" | "down" | "top" | "bottom") => void;
+  onReorder: (id: string, targetId: string, position: LayerDropPosition) => void;
+  onToggleVisibility: (id: string) => void;
+}) {
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: LayerDropPosition } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const resetDrag = () => {
+    setDraggedId(null);
+    setDropTarget(null);
+  };
+
+  const getDropTargetAtPoint = (clientX: number, clientY: number) => {
+    const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-layer-id]");
+    if (!target || !panelRef.current?.contains(target)) return null;
+    const targetId = target.dataset.layerId;
+    if (!targetId) return null;
+    const rect = target.getBoundingClientRect();
+    return {
+      id: targetId,
+      position: clientY < rect.top + rect.height / 2 ? "before" as const : "after" as const,
+    };
+  };
+
+  useEffect(() => {
+    if (!draggedId) return undefined;
+    const handlePointerMove = (event: PointerEvent) => {
+      const target = getDropTargetAtPoint(event.clientX, event.clientY);
+      setDropTarget(target && target.id !== draggedId ? target : null);
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      const target = getDropTargetAtPoint(event.clientX, event.clientY);
+      if (target && target.id !== draggedId) onReorder(draggedId, target.id, target.position);
+      resetDrag();
+    };
+    const handlePointerCancel = () => resetDrag();
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    };
+  }, [draggedId, onReorder]);
+
   return (
-    <div className="ab-panel-content ab-list-panel">
-      <div className="ab-panel-heading"><div><span className="ab-panel-eyebrow">页面图层</span><h2>图层顺序</h2></div><span className="ab-panel-note">上方优先显示</span></div>
-      <div className="ab-layer-list">
-        {elements.map((element, index) => (
-          <div key={element.id} className={`ab-layer-item${selectedId === element.id ? " is-selected" : ""}`} onClick={() => onSelect(element.id)}>
-            <GripVertical size={14} className="ab-layer-drag" />
-            <span className={`ab-layer-icon ab-layer-icon--${element.type}`}>{element.type === "text" ? <Type size={13} /> : element.type === "image" ? <FileImage size={13} /> : element.type === "motion" ? <Film size={13} /> : <MessageCircle size={13} />}</span>
-            <span className="ab-layer-name">{elementName(element)}</span>
-            <span className="ab-layer-index">{elements.length - index}</span>
-            {selectedId === element.id && <div className="ab-layer-actions"><button type="button" onClick={(event) => { event.stopPropagation(); onMove(element.id, "top"); }} title="置顶"><ChevronsUp size={13} /></button><button type="button" onClick={(event) => { event.stopPropagation(); onMove(element.id, "up"); }} title="上移"><ChevronUp size={13} /></button><button type="button" onClick={(event) => { event.stopPropagation(); onMove(element.id, "down"); }} title="下移"><ChevronDown size={13} /></button><button type="button" onClick={(event) => { event.stopPropagation(); onMove(element.id, "bottom"); }} title="置底"><ChevronsDown size={13} /></button></div>}
-          </div>
-        ))}
+    <div
+      id="ab-canvas-layer-panel"
+      className="ab-canvas-layer-panel"
+      ref={panelRef}
+      role="region"
+      aria-label="图层顺序"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="ab-canvas-layer-list" role="list" aria-label="当前页面图层">
+        {elements.length === 0 && <div className="ab-canvas-layer-empty">当前页面暂无元素</div>}
+        {elements.map((element, index) => {
+          const hidden = element.hidden === true;
+          const typeLabel = getLayerTypeLabel(element.type);
+          const isDropBefore = dropTarget?.id === element.id && dropTarget.position === "before";
+          const isDropAfter = dropTarget?.id === element.id && dropTarget.position === "after";
+          return (
+            <div
+              key={element.id}
+              className={`ab-canvas-layer-row${selectedId === element.id ? " is-selected" : ""}${hidden ? " is-hidden" : ""}${draggedId === element.id ? " is-dragging" : ""}${isDropBefore ? " is-drop-before" : ""}${isDropAfter ? " is-drop-after" : ""}`}
+              role="listitem"
+              data-layer-id={element.id}
+              aria-posinset={index + 1}
+              aria-setsize={elements.length}
+              onClick={() => onSelect(element.id)}
+            >
+              <span
+                className="ab-canvas-layer-drag"
+                role="button"
+                tabIndex={0}
+                aria-label={`拖动${typeLabel}“${elementName(element)}”，可使用上下方向键调整顺序`}
+                title="拖动调整图层顺序"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setDraggedId(element.id);
+                  setDropTarget(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onMove(element.id, "up");
+                  } else if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onMove(element.id, "down");
+                  } else if (event.key === "Home") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onMove(element.id, "top");
+                  } else if (event.key === "End") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onMove(element.id, "bottom");
+                  }
+                }}
+              >
+                <GripVertical size={14} aria-hidden="true" />
+              </span>
+              <span className={`ab-canvas-layer-icon ab-canvas-layer-icon--${element.type}`} aria-hidden="true">
+                {getLayerTypeIcon(element.type)}
+              </span>
+              <span className="ab-canvas-layer-name" title={elementName(element)}>{elementName(element)}</span>
+              <button
+                type="button"
+                className="ab-canvas-layer-visibility"
+                aria-label={`${hidden ? "显示" : "隐藏"}${typeLabel}`}
+                title={hidden ? `显示${typeLabel}` : `隐藏${typeLabel}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleVisibility(element.id);
+                }}
+              >
+                {hidden ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+              </button>
+            </div>
+          );
+        })}
       </div>
-      <p className="ab-helper-text">当前支持置顶、置底、上移、下移；本期不提供锁定和隐藏。</p>
     </div>
   );
 }

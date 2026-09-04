@@ -17,10 +17,10 @@ const asset = (name: string) => `/animation-book/assets/${name}`;
 const coverImage: ImageElement = {
   id: "cover-image",
   type: "image",
-  x: 82,
-  y: 86,
-  width: 730,
-  height: 822,
+  x: 286,
+  y: 201,
+  width: 678,
+  height: 678,
   zIndex: 1,
   src: asset("scene-1.jpeg"),
   alt: "绘本封面插图",
@@ -30,33 +30,87 @@ const coverImage: ImageElement = {
 const coverTitle: TextElement = {
   id: "cover-title",
   type: "text",
-  x: 980,
-  y: 212,
-  width: 760,
-  height: 150,
+  x: 994,
+  y: 330,
+  width: 640,
+  height: 90,
   zIndex: 2,
   content: "北风和太阳",
-  fontSize: 76,
-  color: "#353e42",
+  fontSize: 60,
+  color: "#404040",
   fontWeight: "bold",
+  coverField: "title",
   audioUrl: null,
+  voiceSupplement: "",
   annotations: [],
 };
 
-const coverMeta: TextElement = {
-  id: "cover-meta",
+const coverTopic: TextElement = {
+  id: "cover-topic",
   type: "text",
-  x: 986,
-  y: 432,
-  width: 700,
-  height: 270,
+  x: 994,
+  y: 528,
+  width: 640,
+  height: 72,
   zIndex: 3,
-  content: "绘本主题：寓言故事\n蓝思指数：33L\n虚构/非虚构：虚构",
-  fontSize: 30,
-  color: "#5d6468",
+  content: "寓言故事",
+  fontSize: 40,
+  color: "#353e42",
   fontWeight: "regular",
+  coverField: "topic",
   audioUrl: null,
+  voiceSupplement: "",
   annotations: [],
+};
+
+const coverWordCount: TextElement = {
+  id: "cover-word-count",
+  type: "text",
+  x: 994,
+  y: 600,
+  width: 640,
+  height: 72,
+  zIndex: 3,
+  content: "约 500 字",
+  fontSize: 40,
+  color: "#353e42",
+  fontWeight: "regular",
+  coverField: "wordCount",
+  audioUrl: null,
+  voiceSupplement: "",
+  annotations: [],
+};
+
+const coverFiction: TextElement = {
+  id: "cover-fiction",
+  type: "text",
+  x: 994,
+  y: 672,
+  width: 640,
+  height: 72,
+  zIndex: 3,
+  content: "虚构",
+  fontSize: 40,
+  color: "#353e42",
+  fontWeight: "regular",
+  coverField: "fiction",
+  audioUrl: null,
+  voiceSupplement: "",
+  annotations: [],
+};
+
+const coverMotion: MotionElement = {
+  id: "cover-motion",
+  type: "motion",
+  x: 0,
+  y: 0,
+  width: 1920,
+  height: 1080,
+  zIndex: 1,
+  src: null,
+  fileName: "待上传动效",
+  objectFit: "cover",
+  hidden: true,
 };
 
 const firstText: TextElement = {
@@ -73,6 +127,7 @@ const firstText: TextElement = {
   color: "#404040",
   fontWeight: "regular",
   audioUrl: null,
+  voiceSupplement: "",
   annotations: [],
 };
 
@@ -128,6 +183,7 @@ const secondText: TextElement = {
   color: "#404040",
   fontWeight: "regular",
   audioUrl: null,
+  voiceSupplement: "",
   annotations: [],
 };
 
@@ -157,6 +213,7 @@ const secondBubble: BubbleElement = {
   tailX: 8,
   tailY: 70,
   audioUrl: null,
+  voiceSupplement: "",
 };
 
 const thirdTitle: TextElement = {
@@ -168,10 +225,11 @@ const thirdTitle: TextElement = {
   height: 90,
   zIndex: 3,
   content: "有用的石头",
-  fontSize: 52,
+  fontSize: 48,
   color: "#353e42",
-  fontWeight: "bold",
+  fontWeight: "regular",
   audioUrl: null,
+  voiceSupplement: "",
   annotations: [],
 };
 
@@ -189,6 +247,7 @@ const thirdText: TextElement = {
   color: "#404040",
   fontWeight: "regular",
   audioUrl: null,
+  voiceSupplement: "",
   annotations: [],
 };
 
@@ -254,10 +313,12 @@ const createPage = (
       { kind: "element", elementId: element.id },
     ));
   const nextRequirements = [...requirements, ...visualRequirements];
-  const playbackOrder: PlaybackOrderItem[] = elements.map((element) => ({
+  const playbackOrder: PlaybackOrderItem[] = elements
+    .filter((element) => element.type !== "question")
+    .map((element) => ({
     elementId: element.id,
     displayMode: "always",
-  }));
+    }));
 
   return {
     id,
@@ -281,8 +342,8 @@ export const initialAnimationBook: AnimationBook = {
     label: "封面",
     kind: "cover",
     backgroundColor: "#fefcf8",
-    elements: [coverImage, coverTitle, coverMeta],
-    appearanceOrder: [coverImage.id, coverTitle.id, coverMeta.id],
+    elements: [coverImage, coverTitle, coverTopic, coverWordCount, coverFiction, coverMotion],
+    appearanceOrder: [coverImage.id, coverTitle.id, coverTopic.id, coverWordCount.id, coverFiction.id, coverMotion.id],
     playbackOrder: [],
     requirements: [
       requirement(
@@ -292,6 +353,20 @@ export const initialAnimationBook: AnimationBook = {
         "<p><strong>画面方向：</strong>保留温暖的绘本质感，北风和太阳需要有明显的角色关系。</p><p>构图以左右分区为主，主体清晰，适合儿童阅读。</p><figure><img src=\"/animation-book/assets/scene-2.jpeg\" alt=\"参考构图\"><figcaption>参考构图与色彩氛围</figcaption></figure>",
         { kind: "element", elementId: coverImage.id },
         uploadedAsset(asset("scene-1.jpeg"), "scene-1.jpeg", "image/jpeg"),
+      ),
+      requirement(
+        "cover-audio-brief",
+        "audio",
+        "封面语音",
+        "",
+        null,
+      ),
+      requirement(
+        "cover-motion-brief",
+        "motion",
+        "封面动效",
+        "",
+        { kind: "element", elementId: coverMotion.id },
       ),
     ],
   },
@@ -371,5 +446,6 @@ export const getElementLabel = (type: AnimationBookPage["elements"][number]["typ
   if (type === "text") return "文本";
   if (type === "image") return "图片";
   if (type === "motion") return "动效";
+  if (type === "question") return "题";
   return "气泡";
 };

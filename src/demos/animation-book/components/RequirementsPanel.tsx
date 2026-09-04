@@ -45,6 +45,7 @@ const elementLabel = (element: BookElement | undefined) => {
   if (element.type === "text") return "文本";
   if (element.type === "image") return element.alt || "图片";
   if (element.type === "motion") return element.fileName || "动效";
+  if (element.type === "question") return element.stem.split("\n")[0] || "题目";
   return element.content.split("\n")[0] || "气泡";
 };
 

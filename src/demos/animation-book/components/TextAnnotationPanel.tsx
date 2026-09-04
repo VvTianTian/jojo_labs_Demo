@@ -1,17 +1,18 @@
-import { useState, type DragEvent as ReactDragEvent } from "react";
-import { ChevronDown, ChevronUp, FileAudio, FileImage, Film, GripVertical, ListOrdered, MessageCircle, Type } from "lucide-react";
-import type { BookElement, PlaybackDisplayMode, PlaybackOrderItem, TextAnnotation, TextAnnotationType } from "../types";
+import { useEffect, useState, type DragEvent as ReactDragEvent } from "react";
+import { Check, ChevronDown, ChevronUp, FileAudio, FileImage, Film, GripVertical, Info, ListOrdered, MessageCircle, Plus, Type, X } from "lucide-react";
+import type { BookElement, PlaybackDisplayMode, PlaybackOrderItem, QuestionElement, QuestionOption, TextAnnotation, TextAnnotationType } from "../types";
 import { ANNOTATION_LABELS } from "../annotation-utils";
 
-export type AnnotationPanelTab = "voice" | TextAnnotationType | "standard" | "playback";
+export type AnnotationPanelTab = "voice" | TextAnnotationType | "standard" | "playback" | "question";
 
 type PlaybackDropPosition = "before" | "after";
 
 interface VoiceItem {
   id: string;
   type: "text" | "bubble";
+  label: string;
   content: string;
-  hasAudio: boolean;
+  voiceSupplement: string;
 }
 
 interface TextAnnotationPanelProps {
@@ -19,6 +20,9 @@ interface TextAnnotationPanelProps {
   annotations: TextAnnotation[];
   selectedAnnotationId: string | null;
   standardInteractionCount: number;
+  question: QuestionElement | null;
+  questionOnly?: boolean;
+  canEditQuestion: boolean;
   voiceItems: VoiceItem[];
   elements: BookElement[];
   playbackOrder: PlaybackOrderItem[];
@@ -29,6 +33,11 @@ interface TextAnnotationPanelProps {
   onSelectAnnotation: (annotationId: string) => void;
   onUpdateAnnotation: (annotationId: string, patch: Partial<TextAnnotation>) => void;
   onQuickFill: (annotationId: string) => void;
+  onUpdateVoiceSupplement: (elementId: string, voiceSupplement: string) => void;
+  onUpdateQuestion: (elementId: string, patch: Partial<Pick<QuestionElement, "stem" | "optionMode">>) => void;
+  onUpdateQuestionOption: (elementId: string, optionId: string, patch: Partial<Pick<QuestionOption, "content" | "isCorrect">>) => void;
+  onAddQuestionOption: (elementId: string) => void;
+  onRemoveQuestionOption: (elementId: string, optionId: string) => void;
 }
 
 const annotationTypes: TextAnnotationType[] = ["word", "sentence", "note"];
@@ -38,13 +47,14 @@ const splitLines = (value: string) => value.split(/\r?\n/).map((line) => line.tr
 const getAnnotationsByType = (annotations: TextAnnotation[], type: TextAnnotationType) =>
   annotations.filter((annotation) => annotation.type === type);
 
-const getElementTypeLabel = (type: VoiceItem["type"]) => type === "text" ? "文本" : "对话";
-
 export function TextAnnotationPanel({
   activeTab,
   annotations,
   selectedAnnotationId,
   standardInteractionCount,
+  question,
+  questionOnly = false,
+  canEditQuestion,
   voiceItems,
   elements,
   playbackOrder,
@@ -55,8 +65,13 @@ export function TextAnnotationPanel({
   onSelectAnnotation,
   onUpdateAnnotation,
   onQuickFill,
+  onUpdateVoiceSupplement,
+  onUpdateQuestion,
+  onUpdateQuestionOption,
+  onAddQuestionOption,
+  onRemoveQuestionOption,
 }: TextAnnotationPanelProps) {
-  const activeAnnotations = activeTab === "voice" || activeTab === "standard" || activeTab === "playback"
+  const activeAnnotations = activeTab === "voice" || activeTab === "standard" || activeTab === "playback" || activeTab === "question"
     ? []
     : getAnnotationsByType(annotations, activeTab);
   const activeAnnotation = activeAnnotations.find((annotation) => annotation.id === selectedAnnotationId)
@@ -67,49 +82,87 @@ export function TextAnnotationPanel({
     <div className="ab-context-panel">
       <div className="ab-context-panel-header" role="tablist" aria-label="正文内容配置">
         <div className="ab-context-tabs">
-          <ContextTab
-            active={activeTab === "voice"}
-            label="领读语音"
-            count={voiceItems.length}
-            onClick={() => onChangeTab("voice")}
-          />
-          {annotationTypes.map((type) => {
-            const count = getAnnotationsByType(annotations, type).length;
-            if (count === 0) return null;
-            return (
+          {questionOnly ? (
+            question && (
               <ContextTab
-                key={type}
-                active={activeTab === type}
-                label={ANNOTATION_LABELS[type]}
-                count={count}
-                onClick={() => onChangeTab(type)}
+                active={activeTab === "question"}
+                label="题"
+                count={1}
+                onClick={() => onChangeTab("question")}
               />
-            );
-          })}
-          {standardInteractionCount > 0 && (
-            <ContextTab
-              active={activeTab === "standard"}
-              label="标准互动"
-              count={standardInteractionCount}
-              disabled
-              onClick={() => undefined}
-            />
+            )
+          ) : (
+            <>
+              <ContextTab
+                active={activeTab === "voice"}
+                label="领读语音"
+                count={voiceItems.length}
+                onClick={() => onChangeTab("voice")}
+              />
+              {annotationTypes.map((type) => {
+                const count = getAnnotationsByType(annotations, type).length;
+                if (count === 0) return null;
+                return (
+                  <ContextTab
+                    key={type}
+                    active={activeTab === type}
+                    label={ANNOTATION_LABELS[type]}
+                    count={count}
+                    onClick={() => onChangeTab(type)}
+                  />
+                );
+              })}
+              {question && (
+                <ContextTab
+                  active={activeTab === "question"}
+                  label="题"
+                  count={1}
+                  onClick={() => onChangeTab("question")}
+                />
+              )}
+              {standardInteractionCount > 0 && (
+                <ContextTab
+                  active={activeTab === "standard"}
+                  label="标准互动"
+                  count={standardInteractionCount}
+                  disabled
+                  onClick={() => undefined}
+                />
+              )}
+            </>
           )}
         </div>
-        <div className="ab-context-playback-slot">
-          <ContextTab
-            active={activeTab === "playback"}
-            label="播放顺序"
-            icon={<ListOrdered size={13} aria-hidden="true" />}
-            className="ab-context-playback-tab"
-            onClick={() => onChangeTab("playback")}
-          />
-        </div>
+        {!questionOnly && (
+          <div className="ab-context-playback-slot">
+            <ContextTab
+              active={activeTab === "playback"}
+              label="播放顺序"
+              icon={<ListOrdered size={13} aria-hidden="true" />}
+              className="ab-context-playback-tab"
+              onClick={() => onChangeTab("playback")}
+            />
+          </div>
+        )}
       </div>
 
       <div className="ab-context-panel-content">
-        {activeTab === "voice" && <VoicePanel items={voiceItems} />}
+        {activeTab === "voice" && (
+          <VoicePanel
+            items={voiceItems}
+            onUpdateVoiceSupplement={onUpdateVoiceSupplement}
+          />
+        )}
         {activeTab === "standard" && <StandardInteractionPlaceholder />}
+        {activeTab === "question" && question && (
+          <QuestionPanel
+            question={question}
+            canEdit={canEditQuestion}
+            onUpdate={onUpdateQuestion}
+            onUpdateOption={onUpdateQuestionOption}
+            onAddOption={onAddQuestionOption}
+            onRemoveOption={onRemoveQuestionOption}
+          />
+        )}
         {activeTab === "playback" && (
           <PlaybackOrderPanel
             elements={elements}
@@ -128,7 +181,7 @@ export function TextAnnotationPanel({
             onSelectAnnotation={onSelectAnnotation}
           />
         )}
-        {activeTab !== "voice" && activeTab !== "standard" && activeTab !== "playback" && !activeAnnotation && (
+        {activeTab !== "voice" && activeTab !== "standard" && activeTab !== "playback" && activeTab !== "question" && !activeAnnotation && (
           <div className="ab-context-empty">当前类型暂无标注</div>
         )}
       </div>
@@ -170,24 +223,159 @@ function ContextTab({
   );
 }
 
-function VoicePanel({ items }: { items: VoiceItem[] }) {
+const EMPTY_VOICE_SUPPLEMENT_TOOLTIP = "暂无音频补充要求（如语气、音色等台词内容以外的要求）";
+
+function VoicePanel({
+  items,
+  onUpdateVoiceSupplement,
+}: {
+  items: VoiceItem[];
+  onUpdateVoiceSupplement: (elementId: string, voiceSupplement: string) => void;
+}) {
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const editingItem = items.find((item) => item.id === editingItemId) ?? null;
+
+  const openEditor = (item: VoiceItem) => {
+    setEditingItemId(item.id);
+    setDraft(item.voiceSupplement);
+  };
+
+  const closeEditor = () => {
+    setEditingItemId(null);
+    setDraft("");
+  };
+
+  const saveEditor = () => {
+    if (!editingItem) return;
+    onUpdateVoiceSupplement(editingItem.id, draft.trim() ? draft : "");
+    closeEditor();
+  };
+
   return (
-    <div className="ab-voice-panel">
-      {items.length === 0 && <div className="ab-context-empty">当前页面暂无文本或对话语音</div>}
-      {items.map((item, index) => (
-        <div className="ab-voice-item" key={item.id}>
-          <span className="ab-voice-index">{index + 1}</span>
-          <span className={`ab-voice-kind ab-voice-kind--${item.type}`}>
-            {item.type === "text" ? <Type size={12} aria-hidden="true" /> : <MessageCircle size={12} aria-hidden="true" />}
-            {getElementTypeLabel(item.type)}
-          </span>
-          <div className="ab-voice-copy">{item.content || "未填写内容"}</div>
-          <span className={`ab-voice-status${item.hasAudio ? " is-ready" : ""}`}>
-            <FileAudio size={14} aria-hidden="true" />
-            {item.hasAudio ? "已上传" : "需求"}
-          </span>
+    <>
+      <div className="ab-voice-panel">
+        {items.length === 0 && <div className="ab-context-empty">当前页面暂无文本或对话语音</div>}
+        {items.map((item, index) => (
+          <div className="ab-voice-item" key={item.id}>
+            <span className="ab-voice-index">{index + 1}</span>
+            <span className={"ab-voice-kind ab-voice-kind--" + item.type}>{item.label}</span>
+            <div className="ab-voice-copy" aria-label={item.label + "台词需求"}>{item.content || "未填写内容"}</div>
+            <VoiceSupplementButton item={item} onClick={() => openEditor(item)} />
+          </div>
+        ))}
+      </div>
+      {editingItem && (
+        <VoiceSupplementModal
+          item={editingItem}
+          draft={draft}
+          onChange={setDraft}
+          onCancel={closeEditor}
+          onConfirm={saveEditor}
+        />
+      )}
+    </>
+  );
+}
+
+function VoiceSupplementButton({
+  item,
+  onClick,
+}: {
+  item: VoiceItem;
+  onClick: () => void;
+}) {
+  const hasSupplement = item.voiceSupplement.trim().length > 0;
+  const tooltipText = hasSupplement ? item.voiceSupplement : EMPTY_VOICE_SUPPLEMENT_TOOLTIP;
+
+  return (
+    <span className="ab-voice-supplement-wrap">
+      <button
+        type="button"
+        className={"ab-voice-supplement-button" + (hasSupplement ? " is-filled" : "")}
+        aria-label={item.label + "补充需求"}
+        title={tooltipText}
+        onClick={onClick}
+      >
+        <span aria-hidden="true">补</span>
+      </button>
+      <span className="ab-voice-supplement-tooltip" role="tooltip">{tooltipText}</span>
+    </span>
+  );
+}
+
+function VoiceSupplementModal({
+  item,
+  draft,
+  onChange,
+  onCancel,
+  onConfirm,
+}: {
+  item: VoiceItem;
+  draft: string;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  return (
+    <div
+      className="ab-voice-dialog-backdrop"
+      onClick={onCancel}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+    >
+      <div
+        className="ab-voice-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ab-voice-dialog-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="ab-voice-dialog-header">
+          <h2 id="ab-voice-dialog-title">领读语音需求</h2>
+          <button type="button" className="ab-voice-dialog-close" aria-label="关闭领读语音需求" title="关闭" onClick={onCancel}>
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
-      ))}
+        <div className="ab-voice-dialog-body">
+          <div className="ab-voice-dialog-alert" role="note">
+            <Info size={16} aria-hidden="true" />
+            <span>台词需求自动保持与正文文本一致，无法修改。若有角色、语气、语速等其它需求请填写至“补充要求”中</span>
+          </div>
+          <div className="ab-voice-dialog-field">
+            <span className="ab-voice-dialog-field-label">台词需求</span>
+            <div className="ab-voice-dialog-readonly">{item.content || "未填写内容"}</div>
+          </div>
+          <label className="ab-voice-dialog-field">
+            <span className="ab-voice-dialog-field-label">补充</span>
+            <textarea
+              autoFocus
+              className="ab-voice-dialog-textarea"
+              value={draft}
+              onChange={(event) => onChange(event.target.value)}
+              placeholder="请输入语气、音色、语速等补充要求"
+              rows={4}
+              aria-label="补充需求"
+            />
+          </label>
+        </div>
+        <div className="ab-voice-dialog-footer">
+          <button type="button" className="ab-secondary-button" onClick={onCancel}>取消</button>
+          <button type="button" className="ab-primary-button" onClick={onConfirm}>确认</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -204,10 +392,155 @@ function StandardInteractionPlaceholder() {
   );
 }
 
+function QuestionPanel({
+  question,
+  canEdit,
+  onUpdate,
+  onUpdateOption,
+  onAddOption,
+  onRemoveOption,
+}: {
+  question: QuestionElement;
+  canEdit: boolean;
+  onUpdate: (elementId: string, patch: Partial<Pick<QuestionElement, "stem" | "optionMode">>) => void;
+  onUpdateOption: (elementId: string, optionId: string, patch: Partial<Pick<QuestionOption, "content" | "isCorrect">>) => void;
+  onAddOption: (elementId: string) => void;
+  onRemoveOption: (elementId: string, optionId: string) => void;
+}) {
+  const minOptions = 2;
+  const maxOptions = 4;
+
+  return (
+    <div className="ab-question-panel">
+      <div className="ab-question-panel-header">
+        <div className="ab-question-panel-meta" aria-label="题目基本信息">
+          <span className="ab-question-meta-number">1</span>
+          <span className="ab-question-meta-tag">标准选择题</span>
+          <span className="ab-question-meta-tag ab-question-meta-tag--blue">QT_000666</span>
+          <span className="ab-question-meta-tag ab-question-meta-tag--muted">待同步</span>
+          <span className="ab-question-meta-copy">通用布局 · 备注 -</span>
+          <button type="button" className="ab-question-meta-link" disabled>引用记录 (3)</button>
+        </div>
+        <div className="ab-question-panel-actions">
+          <button type="button" className="ab-secondary-button" disabled>取消</button>
+          <button type="button" className="ab-primary-button" disabled={!canEdit}>保存</button>
+        </div>
+      </div>
+
+      <div className="ab-question-panel-body">
+        <section className="ab-question-section ab-question-section--main">
+          <div className="ab-question-section-heading">
+            <h3>题目区</h3>
+          </div>
+
+          <label className="ab-question-field">
+            <span className="ab-question-field-label">题干文字</span>
+            <textarea
+              value={question.stem}
+              readOnly={!canEdit}
+              onChange={(event) => onUpdate(question.id, { stem: event.target.value })}
+              placeholder="请输入内容"
+              rows={2}
+              aria-label="题干文字"
+            />
+          </label>
+          <button type="button" className="ab-question-inline-button" disabled>
+            <FileAudio size={13} aria-hidden="true" />题干语音
+          </button>
+
+          <div className="ab-question-materials">
+            <span className="ab-question-field-label">材料</span>
+            <div className="ab-question-material-actions">
+              <button type="button" className="ab-question-material-button" disabled>＋文字材料</button>
+              <button type="button" className="ab-question-material-button" disabled>＋图片材料</button>
+              <button type="button" className="ab-question-material-button" disabled>＋听力材料</button>
+            </div>
+          </div>
+
+          <div className="ab-question-options-heading">
+            <span className="ab-question-field-label">选项</span>
+            <div className="ab-question-option-mode" role="group" aria-label="选项类型">
+              <button type="button" className={question.optionMode === "text" ? "is-active" : ""} disabled={!canEdit} onClick={() => onUpdate(question.id, { optionMode: "text" })}>文本选项</button>
+              <button type="button" className={question.optionMode === "image" ? "is-active" : ""} disabled>图片选项</button>
+            </div>
+          </div>
+
+          <div className="ab-question-options-grid">
+            {question.options.map((option, index) => (
+              <div className="ab-question-option-editor" key={option.id}>
+                <span className="ab-question-option-prefix" aria-hidden="true">{String.fromCharCode(65 + index)}</span>
+                <input
+                  type="text"
+                  value={option.content}
+                  readOnly={!canEdit || question.optionMode === "image"}
+                  onChange={(event) => onUpdateOption(question.id, option.id, { content: event.target.value })}
+                  placeholder="请输入选项内容"
+                  aria-label={`选项${String.fromCharCode(65 + index)}`}
+                />
+                <button
+                  type="button"
+                  className={`ab-question-correct-button${option.isCorrect ? " is-active" : ""}`}
+                  aria-pressed={option.isCorrect}
+                  disabled={!canEdit}
+                  onClick={() => onUpdateOption(question.id, option.id, { isCorrect: !option.isCorrect })}
+                >
+                  {option.isCorrect && <Check size={12} aria-hidden="true" />}
+                  {option.isCorrect ? "正确选项" : "设为正确选项"}
+                </button>
+                <button
+                  type="button"
+                  className="ab-question-option-remove"
+                  aria-label={`删除选项${String.fromCharCode(65 + index)}`}
+                  title={question.options.length <= minOptions ? "至少保留两个选项" : "删除选项"}
+                  disabled={!canEdit || question.options.length <= minOptions}
+                  onClick={() => onRemoveOption(question.id, option.id)}
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="ab-question-options-footer">
+            <button
+              type="button"
+              className="ab-question-add-option"
+              disabled={!canEdit || question.options.length >= maxOptions}
+              onClick={() => onAddOption(question.id)}
+            >
+              <Plus size={14} aria-hidden="true" />添加选项
+            </button>
+            <span>选项显示数量 <strong>{question.options.length}</strong></span>
+          </div>
+        </section>
+
+        <QuestionPlaceholderSection title="答案区">暂未设置</QuestionPlaceholderSection>
+        <QuestionPlaceholderSection title="解析区">
+          <span>解析内容</span>
+          <div className="ab-question-placeholder-actions"><button type="button" disabled>添加文本</button><button type="button" disabled>添加图片</button><button type="button" disabled>添加图文</button></div>
+        </QuestionPlaceholderSection>
+        <QuestionPlaceholderSection title="标签区">
+          <div className="ab-question-placeholder-tags"><span>真题来源</span><span>标签课程线</span><span>知识点</span><span>难度</span><span>能力</span></div>
+        </QuestionPlaceholderSection>
+      </div>
+    </div>
+  );
+}
+
+function QuestionPlaceholderSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="ab-question-section ab-question-section--placeholder">
+      <div className="ab-question-section-heading"><h3>{title}</h3></div>
+      <div className="ab-question-placeholder-content">{children}</div>
+    </section>
+  );
+}
+
 function getPlaybackElementTitle(element: BookElement) {
   if (element.type === "text") return element.content || "未填写文本";
   if (element.type === "image") return element.alt || "未命名图片";
   if (element.type === "motion") return element.fileName || "未命名动效";
+  if (element.type === "question") return element.stem || "题目";
   return element.content || "未填写对话";
 }
 
@@ -215,6 +548,7 @@ function getPlaybackElementLabel(element: BookElement) {
   if (element.type === "text") return "文本";
   if (element.type === "image") return "图片";
   if (element.type === "motion") return "动效";
+  if (element.type === "question") return "题";
   return "对话";
 }
 
@@ -225,7 +559,7 @@ function PlaybackElementPreview({ element }: { element: BookElement }) {
 
   return (
     <span className={`ab-playback-element-icon ab-playback-element-icon--${element.type}`} aria-hidden="true">
-      {element.type === "text" ? <Type size={14} /> : element.type === "image" ? <FileImage size={14} /> : element.type === "motion" ? <Film size={14} /> : <MessageCircle size={14} />}
+      {element.type === "text" ? <Type size={14} /> : element.type === "image" ? <FileImage size={14} /> : element.type === "motion" ? <Film size={14} /> : element.type === "question" ? <span>题</span> : <MessageCircle size={14} />}
     </span>
   );
 }

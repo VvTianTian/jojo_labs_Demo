@@ -1,7 +1,8 @@
 export type BookLanguage = "zh" | "en";
 export type CoverLayout = "split" | "fullscreen";
+export type CoverTextField = "title" | "topic" | "wordCount" | "fiction";
 export type UserRole = "research" | "production";
-export type ElementType = "text" | "image" | "motion" | "bubble";
+export type ElementType = "text" | "image" | "motion" | "bubble" | "question";
 export type RequirementType = "image" | "motion" | "audio";
 export type RequirementStatus = "pending" | "uploaded" | "failed";
 export type BubbleDirection = "left" | "right";
@@ -9,6 +10,7 @@ export type TextAlign = "left" | "center" | "right" | "justify";
 export type TextAnnotationType = "word" | "sentence" | "note";
 export type PronunciationMode = "pinyin" | "phonetic";
 export type PlaybackDisplayMode = "always" | "onPlayback";
+export type QuestionOptionMode = "text" | "image";
 
 export interface TextAnnotation {
   id: string;
@@ -28,6 +30,8 @@ export interface TextAnnotation {
 export interface ElementBase {
   id: string;
   type: ElementType;
+  /** Hidden elements remain in the page model and layer list but are not rendered on the canvas. */
+  hidden?: boolean;
   x: number;
   y: number;
   width: number;
@@ -37,6 +41,8 @@ export interface ElementBase {
 
 export interface TextElement extends ElementBase {
   type: "text";
+  /** Fixed input slot used by the cover template; body text has no cover field. */
+  coverField?: CoverTextField;
   content: string;
   fontSize: number;
   color: string;
@@ -45,6 +51,7 @@ export interface TextElement extends ElementBase {
   italic?: boolean;
   underline?: boolean;
   audioUrl: string | null;
+  voiceSupplement: string;
   annotations: TextAnnotation[];
 }
 
@@ -69,9 +76,23 @@ export interface BubbleElement extends ElementBase {
   tailX: number;
   tailY: number;
   audioUrl: string | null;
+  voiceSupplement: string;
 }
 
-export type BookElement = TextElement | ImageElement | MotionElement | BubbleElement;
+export interface QuestionOption {
+  id: string;
+  content: string;
+  isCorrect: boolean;
+}
+
+export interface QuestionElement extends ElementBase {
+  type: "question";
+  stem: string;
+  optionMode: QuestionOptionMode;
+  options: QuestionOption[];
+}
+
+export type BookElement = TextElement | ImageElement | MotionElement | BubbleElement | QuestionElement;
 
 export interface RichTextDocument {
   html: string;
@@ -97,6 +118,7 @@ export interface ProductionRequirement {
   asset: ProductionAsset | null;
   status: RequirementStatus;
   errorMessage?: string;
+  supplementalBrief?: RichTextDocument;
 }
 
 export interface PlaybackOrderItem {
