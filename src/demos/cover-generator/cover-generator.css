@@ -89,21 +89,12 @@
   border-color: var(--cover-border);
 }
 
-.cover-header__brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.cover-header__brand-logo {
+  display: block;
   width: 30px;
   height: 30px;
   flex-shrink: 0;
-  border-radius: 9px;
-  color: #fff;
-  background: linear-gradient(145deg, #22b8ef, #007dbd);
-  box-shadow: 0 5px 12px rgb(0 144 217 / 22%);
-  font-family: Georgia, serif;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
+  object-fit: contain;
 }
 
 .cover-header__identity {
@@ -1491,27 +1482,11 @@
   white-space: nowrap;
 }
 
-.cover-header__brand-mark {
+.cover-header__brand-logo {
   width: 36px;
   height: 36px;
   border-radius: 11px;
-  font-size: 22px;
   box-shadow: 0 6px 14px rgb(0 126 191 / 23%);
-}
-
-.cover-header__brand-name {
-  color: #168ed5;
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  white-space: nowrap;
-}
-
-.cover-header__divider {
-  width: 1px;
-  height: 28px;
-  margin: 0 10px;
-  background: #dce7ec;
 }
 
 .cover-header__identity h1 {
@@ -1902,15 +1877,6 @@
     display: none;
   }
 
-  .cover-header__brand-name {
-    font-size: 16px;
-  }
-
-  .cover-header__divider {
-    margin-right: 2px;
-    margin-left: 2px;
-  }
-
   .cover-header__actions {
     gap: 8px;
   }
@@ -1943,11 +1909,6 @@
   .cover-header {
     position: sticky;
     top: 0;
-  }
-
-  .cover-header__brand-name,
-  .cover-header__divider {
-    display: none;
   }
 
   .cover-layout {

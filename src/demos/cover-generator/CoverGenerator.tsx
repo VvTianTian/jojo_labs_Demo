@@ -282,11 +282,14 @@ export const CoverGenerator: React.FC = () => {
           <span>工具首页</span>
         </Link>
 
-        <div className="cover-header__brand-mark" aria-hidden="true">J</div>
-        <span className="cover-header__brand-name">Jojo Labs</span>
-        <span className="cover-header__divider" aria-hidden="true" />
+        <img
+          className="cover-header__brand-logo"
+          src="/cover-generator/assets/branding/jojo-labs-logo.png"
+          alt=""
+          aria-hidden="true"
+        />
         <div className="cover-header__identity">
-          <h1>项目封面配置器</h1>
+          <h1>JOJO Labs</h1>
         </div>
 
         <div className="cover-header__spacer" />

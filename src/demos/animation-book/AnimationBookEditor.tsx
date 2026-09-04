@@ -53,8 +53,12 @@ import {
   getTextSelectionRange,
   hasAnnotationContent,
   normalizeAnnotations,
+  readPlainTextFromContentEditable,
+  replaceContentEditableSelection,
   selectTextRange,
+  setTextCaret,
   type TextSelectionRange,
+  writePlainTextToContentEditable,
 } from "./annotation-utils";
 import { RequirementsPanel } from "./components/RequirementsPanel";
 import { RequirementRichText, RichTextPreview } from "./components/RequirementRichText";
@@ -136,6 +140,8 @@ const BASIC_INFO_MUSIC_OPTIONS = [
 const ANIMATION_BOOK_GRID_ASSET = "/animation-book/assets/animation-book-grid-system.png";
 const BODY_TEXT_FONT_FAMILY = '"PingFang SC", "PingFang TC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif';
 const BODY_TEXT_PARAGRAPH_INDENT = "32px";
+const TEXT_ELEMENT_PLACEHOLDER = "双击编辑文字";
+const BUBBLE_ELEMENT_PLACEHOLDER = "请输入对话";
 const QUESTION_CANVAS_X = 1044;
 const QUESTION_CANVAS_Y = 198;
 const QUESTION_CANVAS_WIDTH = 540;
@@ -390,6 +396,9 @@ export function AnimationBookEditor() {
     if (!isResearch || layout === book.coverLayout) return;
     const hasText = book.cover.elements.some((element) => element.type === "text" && element.content.trim());
     if (layout === "fullscreen" && hasText && !window.confirm("切换为全屏布局将清空封面文字内容，是否继续？")) return;
+    const currentMediaType = book.cover.elements.some(
+      (element) => element.id === "cover-motion" && element.hidden !== true,
+    ) ? "motion" : "image";
     setBook((previous) => updatePage(
       { ...previous, coverLayout: layout },
       "cover",
@@ -397,10 +406,10 @@ export function AnimationBookEditor() {
         ...page,
         elements: page.elements.map((element) => {
           if (element.id === "cover-image" && element.type === "image") {
-            return { ...element, ...COVER_SPLIT_IMAGE, hidden: false };
+            return { ...element, ...COVER_SPLIT_IMAGE, hidden: layout === "fullscreen" && currentMediaType !== "image" };
           }
           if (element.id === "cover-motion" && element.type === "motion") {
-            return { ...element, ...COVER_FULLSCREEN_MEDIA, hidden: layout !== "fullscreen" };
+            return { ...element, ...COVER_FULLSCREEN_MEDIA, hidden: layout !== "fullscreen" || currentMediaType !== "motion" };
           }
           if (element.type === "text" && element.coverField) {
             return {
@@ -440,8 +449,9 @@ export function AnimationBookEditor() {
 
   const selectView = (nextViewId: ViewId) => {
     const nextPage = getPage(book, nextViewId);
+    const nextVisibleElement = nextPage?.elements.find((element) => element.hidden !== true) ?? nextPage?.elements[0];
     setViewId(nextViewId);
-    setSelectedId(nextPage?.elements[0]?.id ?? null);
+    setSelectedId(nextVisibleElement?.id ?? null);
     setSelectedRequirementId(nextPage?.requirements[0]?.id ?? null);
     setEditingTextId(null);
     setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage, role));
@@ -1772,10 +1782,12 @@ export function AnimationBookEditor() {
                           />
                         ) : currentPage.kind === "cover" && (element.type === "image" || element.type === "motion") ? (
                           <CoverMediaElement
+                            key={`${element.id}-${book.coverLayout}`}
                             element={element}
                             layout={book.coverLayout}
                             selected={selectedId === element.id}
                             research={isResearch}
+                            requirement={elementRequirement}
                             onSelect={() => selectElement(element.id)}
                             onRequestUpload={() => requestCoverMediaUpload(element.id)}
                             onDelete={() => element.type === "image" ? clearImageAsset(element.id) : clearMotionAsset(element.id)}
@@ -2135,11 +2147,11 @@ function PanelTabButton({ active, onClick, label, count }: { active: boolean; on
 
 const getThumbnailImage = (page: AnimationBookPage) =>
   page.elements.find(
-    (element): element is ImageElement => element.type === "image" && Boolean(element.src.trim()),
+    (element): element is ImageElement => element.type === "image" && element.hidden !== true && Boolean(element.src.trim()),
   )?.src ?? null;
 
 const getCoverTitle = (page: AnimationBookPage) =>
-  page.elements.find((element): element is TextElement => element.type === "text")?.content.split("\n")[0]?.trim() || "未命名标题";
+  page.elements.find((element): element is TextElement => element.type === "text" && element.coverField === "title")?.content.split("\n")[0]?.trim() || "未命名标题";
 
 function ThumbnailPreview({
   imageSrc,
@@ -2408,21 +2420,20 @@ function CanvasElement({
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const pointerMovedRef = useRef(false);
 
-  useEffect(() => {
-    if (!editing || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
+  useLayoutEffect(() => {
+    if (!editing || !canEditText || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
+    writePlainTextToContentEditable(
+      textContentRef.current,
+      element.content,
+      element.type === "text" ? TEXT_ELEMENT_PLACEHOLDER : BUBBLE_ELEMENT_PLACEHOLDER,
+    );
     textContentRef.current.focus();
     if (element.type === "text" && textSelection) {
       selectTextRange(textContentRef.current, textSelection);
       return;
     }
-    const selection = window.getSelection();
-    if (!selection) return;
-    const range = document.createRange();
-    range.selectNodeContents(textContentRef.current);
-    range.collapse(false);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }, [editing, element.type, textSelection]);
+    setTextCaret(textContentRef.current, element.content.length);
+  }, [canEditText, editing, element.id, element.type]);
 
   useLayoutEffect(() => {
     if (!autoHeightResizeActive) {
@@ -2461,6 +2472,12 @@ function CanvasElement({
     height: `${(element.height / CANVAS_HEIGHT) * 100}%`,
     zIndex: element.zIndex,
   };
+  const replaceEditorSelection = (root: HTMLElement, insertedText: string) => {
+    const nextContent = replaceContentEditableSelection(root, insertedText);
+    if (nextContent === null) return;
+    onTextChange(nextContent);
+    onTextSelectionChange?.(null);
+  };
   const editableContentProps = {
     ref: textContentRef,
     contentEditable: editing && canEditText,
@@ -2468,12 +2485,23 @@ function CanvasElement({
     onCompositionStart: () => { isComposingRef.current = true; },
     onCompositionEnd: (event: React.CompositionEvent<HTMLDivElement>) => {
       isComposingRef.current = false;
-      onTextChange(event.currentTarget.textContent ?? "");
+      onTextChange(readPlainTextFromContentEditable(event.currentTarget));
     },
     onInput: (event: React.FormEvent<HTMLDivElement>) => {
       const nativeEvent = event.nativeEvent as InputEvent;
       if (isComposingRef.current || nativeEvent.isComposing) return;
-      onTextChange(event.currentTarget.textContent ?? "");
+      onTextChange(readPlainTextFromContentEditable(event.currentTarget));
+    },
+    onBeforeInput: (event: React.FormEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) return;
+      const nativeEvent = event.nativeEvent as InputEvent;
+      if (nativeEvent.inputType !== "insertParagraph" && nativeEvent.inputType !== "insertLineBreak") return;
+      event.preventDefault();
+      replaceEditorSelection(event.currentTarget, "\n");
+    },
+    onPaste: (event: React.ClipboardEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      replaceEditorSelection(event.currentTarget, event.clipboardData.getData("text/plain"));
     },
     onMouseUp: () => {
       if (textContentRef.current) onTextSelectionChange?.(getTextSelectionRange(textContentRef.current));
@@ -2487,6 +2515,11 @@ function CanvasElement({
       if (event.key === "Escape") {
         event.preventDefault();
         onEndTextEdit();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        replaceEditorSelection(event.currentTarget, "\n");
       }
     },
   };
@@ -2540,9 +2573,12 @@ function CanvasElement({
     <div ref={elementRef} {...baseProps}>
       {element.type === "text" && (
         editing ? (
-          <div {...editableContentProps} className="ab-canvas-text-content" style={textStyle}>
-            {element.content}
-          </div>
+          <div
+            {...editableContentProps}
+            className={`ab-canvas-text-content${isBodyText ? " is-body-text" : ""}`}
+            data-placeholder={TEXT_ELEMENT_PLACEHOLDER}
+            style={textStyle}
+          />
         ) : (
           <AnnotatedTextContent
             element={element}
@@ -2591,9 +2627,9 @@ function CanvasElement({
           <div
             {...editableContentProps}
             className="ab-canvas-bubble-content"
-            data-placeholder="请输入对话"
+            data-placeholder={BUBBLE_ELEMENT_PLACEHOLDER}
           >
-            {element.content}
+            {!editing && element.content}
           </div>
           <span
             className={`ab-bubble-tail ab-bubble-tail--${element.direction}`}
@@ -2657,64 +2693,91 @@ function AnnotatedTextContent({
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
   const segments = buildAnnotationSegments(element.content, annotations);
   const style = getCanvasTextStyle(element, isBodyText);
+  const paragraphs = segments.reduce<typeof segments[]>((result, segment) => {
+    const parts = segment.text.split("\n");
+    let partStart = segment.start;
+    parts.forEach((text, index) => {
+      const partEnd = partStart + text.length;
+      if (text.length > 0) {
+        result[result.length - 1].push({ ...segment, start: partStart, end: partEnd, text });
+      }
+      if (index < parts.length - 1) {
+        result.push([]);
+        partStart = partEnd + 1;
+      } else {
+        partStart = partEnd;
+      }
+    });
+    return result;
+  }, [[]]);
+
+  const renderSegment = (segment: (typeof segments)[number]) => {
+    let decorated: React.ReactNode = segment.text;
+    if (segment.annotations.some((annotation) => annotation.type === "note")) {
+      decorated = <span className="ab-annotation-decoration ab-annotation-decoration--note">{decorated}</span>;
+    }
+    if (segment.annotations.some((annotation) => annotation.type === "sentence")) {
+      decorated = <span className="ab-annotation-decoration ab-annotation-decoration--sentence">{decorated}</span>;
+    }
+    if (segment.annotations.some((annotation) => annotation.type === "word")) {
+      decorated = <span className="ab-annotation-decoration ab-annotation-decoration--word">{decorated}</span>;
+    }
+    const controls = segment.annotations.filter((annotation) => annotation.start === segment.start);
+    const hoveredControl = segment.annotations.find((annotation) => annotation.id === hoveredAnnotationId);
+    const visibleControls = controls.length > 0 ? controls : hoveredControl ? [hoveredControl] : [];
+    const firstAnnotation = segment.annotations[0];
+    const isClickable = Boolean(firstAnnotation && onSelectAnnotation);
+    return (
+      <span
+        key={`${segment.start}-${segment.end}`}
+        className={`ab-annotation-segment${isClickable ? " is-clickable" : ""}`}
+        onMouseEnter={() => setHoveredAnnotationId(controls[0]?.id ?? segment.annotations[0]?.id ?? null)}
+        onMouseLeave={() => setHoveredAnnotationId(null)}
+        onPointerDown={(event) => {
+          if (isClickable) event.stopPropagation();
+        }}
+        onClick={(event) => {
+          if (!isClickable || !firstAnnotation) return;
+          event.stopPropagation();
+          onSelectAnnotation?.(firstAnnotation.id);
+        }}
+      >
+        {decorated}
+        {hoveredAnnotationId && segment.annotations.some((annotation) => annotation.id === hoveredAnnotationId) && visibleControls.length > 0 && (
+          <span className="ab-annotation-delete-list">
+            {visibleControls.map((annotation) => (
+              <button
+                type="button"
+                key={annotation.id}
+                className="ab-annotation-delete-button"
+                aria-label={`删除${annotation.text}${annotation.type === "word" ? "好词" : annotation.type === "sentence" ? "好句" : "注释"}`}
+                title="删除标注"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRequestDelete?.(annotation.id);
+                }}
+              >
+                <Trash2 size={11} aria-hidden="true" />
+              </button>
+            ))}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   return (
-    <div className="ab-canvas-text-content ab-canvas-text-rendered" style={style}>
-      {segments.map((segment) => {
-        let decorated: React.ReactNode = segment.text;
-        if (segment.annotations.some((annotation) => annotation.type === "note")) {
-          decorated = <span className="ab-annotation-decoration ab-annotation-decoration--note">{decorated}</span>;
-        }
-        if (segment.annotations.some((annotation) => annotation.type === "sentence")) {
-          decorated = <span className="ab-annotation-decoration ab-annotation-decoration--sentence">{decorated}</span>;
-        }
-        if (segment.annotations.some((annotation) => annotation.type === "word")) {
-          decorated = <span className="ab-annotation-decoration ab-annotation-decoration--word">{decorated}</span>;
-        }
-        const controls = segment.annotations.filter((annotation) => annotation.start === segment.start);
-        const hoveredControl = segment.annotations.find((annotation) => annotation.id === hoveredAnnotationId);
-        const visibleControls = controls.length > 0 ? controls : hoveredControl ? [hoveredControl] : [];
-        const firstAnnotation = segment.annotations[0];
-        const isClickable = Boolean(firstAnnotation && onSelectAnnotation);
-        return (
-          <span
-            key={`${segment.start}-${segment.end}`}
-            className={`ab-annotation-segment${isClickable ? " is-clickable" : ""}`}
-            onMouseEnter={() => setHoveredAnnotationId(controls[0]?.id ?? segment.annotations[0]?.id ?? null)}
-            onMouseLeave={() => setHoveredAnnotationId(null)}
-            onPointerDown={(event) => {
-              if (isClickable) event.stopPropagation();
-            }}
-            onClick={(event) => {
-              if (!isClickable || !firstAnnotation) return;
-              event.stopPropagation();
-              onSelectAnnotation?.(firstAnnotation.id);
-            }}
-          >
-            {decorated}
-            {hoveredAnnotationId && segment.annotations.some((annotation) => annotation.id === hoveredAnnotationId) && visibleControls.length > 0 && (
-              <span className="ab-annotation-delete-list">
-                {visibleControls.map((annotation) => (
-                  <button
-                    type="button"
-                    key={annotation.id}
-                    className="ab-annotation-delete-button"
-                    aria-label={`删除${annotation.text}${annotation.type === "word" ? "好词" : annotation.type === "sentence" ? "好句" : "注释"}`}
-                    title="删除标注"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onRequestDelete?.(annotation.id);
-                    }}
-                  >
-                    <Trash2 size={11} aria-hidden="true" />
-                  </button>
-                ))}
-              </span>
-            )}
-          </span>
-        );
-      })}
+    <div
+      className={`ab-canvas-text-content ab-canvas-text-rendered${isBodyText ? " is-body-text" : ""}`}
+      data-placeholder={element.content ? undefined : TEXT_ELEMENT_PLACEHOLDER}
+      style={style}
+    >
+      {element.content && paragraphs.map((paragraph, index) => (
+        <div className="ab-canvas-text-paragraph" key={`paragraph-${index}`}>
+          {paragraph.map(renderSegment)}
+        </div>
+      ))}
     </div>
   );
 }
@@ -2999,6 +3062,7 @@ function CoverMediaElement({
   layout,
   selected,
   research,
+  requirement,
   onSelect,
   onRequestUpload,
   onDelete,
@@ -3008,6 +3072,7 @@ function CoverMediaElement({
   layout: CoverLayout;
   selected: boolean;
   research: boolean;
+  requirement?: ProductionRequirement;
   onSelect: () => void;
   onRequestUpload: () => void;
   onDelete: () => void;
@@ -3038,10 +3103,6 @@ function CoverMediaElement({
       document.removeEventListener("keydown", handleDocumentKeyDown);
     };
   }, [menuOpen]);
-
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [layout, element.id]);
 
   const media = element.src ? (
     isVideoSource ? (
@@ -3096,6 +3157,7 @@ function CoverMediaElement({
             aria-haspopup="listbox"
             aria-expanded={menuOpen}
             aria-label="切换封面媒体类型"
+            disabled={!research}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
@@ -3139,6 +3201,9 @@ function CoverMediaElement({
           {element.src && <button type="button" aria-label={`删除${isImage ? "图片" : "动效"}`} title={`删除${isImage ? "图片" : "动效"}`} onClick={onDelete}><Trash2 size={16} aria-hidden="true" /></button>}
         </div>
       )}
+      {!research && requirement?.status === "failed" && (
+        <span className="ab-cover-media-error">{requirement.errorMessage || "上传失败，可重试"}</span>
+      )}
     </div>
   );
 }
@@ -3175,7 +3240,7 @@ function CoverAudioPanel({
           <div className="ab-cover-audio-media">
             <span className="ab-cover-audio-tag">语音</span>
             <label
-              className="ab-cover-audio-upload"
+              className={`ab-cover-audio-upload${research ? " is-readonly" : ""}`}
               onDragOver={(event) => { if (!research) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
               onDrop={(event) => {
                 if (research) return;
@@ -3185,9 +3250,10 @@ function CoverAudioPanel({
               }}
             >
               <Upload size={24} aria-hidden="true" />
-              <span>点击或拖拽音频进行上传</span>
+              <span>{requirement?.asset ? `已有音频：${requirement.asset.fileName}，点击或拖拽替换` : "点击或拖拽音频进行上传"}</span>
               <input className="ab-hidden-input" type="file" accept="audio/*" disabled={research} onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.currentTarget.value = ""; }} />
             </label>
+            {requirement?.asset && <audio className="ab-cover-audio-player" controls src={requirement.asset.url} aria-label="播放封面语音" />}
             <div className="ab-cover-audio-demand">
               <button type="button" className="ab-cover-audio-demand-toggle" aria-expanded={requirementOpen} onClick={() => setRequirementOpen((value) => !value)}>
                 <span>需求</span>{requirementOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
