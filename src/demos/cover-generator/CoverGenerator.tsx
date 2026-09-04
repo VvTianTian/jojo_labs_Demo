@@ -66,7 +66,11 @@ function isSameVisualCombination(first: CoverDraft, second: CoverDraft) {
     && first.direction === second.direction;
 }
 
-export const CoverGenerator: React.FC = () => {
+interface CoverGeneratorProps {
+  standalone?: boolean;
+}
+
+export const CoverGenerator: React.FC<CoverGeneratorProps> = ({ standalone = false }) => {
   const [formState, setFormState] = useState<CoverFormState>(INITIAL_STATE);
   const [fontStatus, setFontStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [assetStatus, setAssetStatus] = useState<CoverAssetsStatus>('loading');
@@ -275,12 +279,14 @@ export const CoverGenerator: React.FC = () => {
             : '请先修正标题';
 
   return (
-    <div className="cover-generator">
+    <div className={`cover-generator${standalone ? ' cover-generator--standalone' : ''}`}>
       <header className="cover-header">
-        <Link to="/" className="cover-header__back" aria-label="返回工具首页">
-          <ChevronLeft size={18} aria-hidden="true" />
-          <span>工具首页</span>
-        </Link>
+        {!standalone && (
+          <Link to="/" className="cover-header__back" aria-label="返回工具首页">
+            <ChevronLeft size={18} aria-hidden="true" />
+            <span>工具首页</span>
+          </Link>
+        )}
 
         <img
           className="cover-header__brand-logo"
@@ -289,7 +295,7 @@ export const CoverGenerator: React.FC = () => {
           aria-hidden="true"
         />
         <div className="cover-header__identity">
-          <h1>JOJO Labs</h1>
+          <h1>项目封面生成器</h1>
         </div>
 
         <div className="cover-header__spacer" />
