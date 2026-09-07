@@ -59,17 +59,18 @@ export const writePlainTextToContentEditable = (
   content: string,
   placeholder?: string,
 ) => {
+  const paragraphPlaceholder = placeholder ?? root.dataset.placeholder;
   root.replaceChildren();
   normalizeLineBreaks(content).split("\n").forEach((paragraphText) => {
     const paragraph = document.createElement("div");
     paragraph.className = "ab-canvas-text-paragraph";
-    if (placeholder) paragraph.dataset.placeholder = placeholder;
+    if (paragraphPlaceholder) paragraph.dataset.placeholder = paragraphPlaceholder;
     paragraph.textContent = paragraphText;
     root.appendChild(paragraph);
   });
 };
 
-const getOffsetInsideNode = (root: Node, target: Node, targetOffset: number) => {
+const getOffsetInsideNode = (root: HTMLElement, target: Node, targetOffset: number) => {
   let total = 0;
   let found = false;
 
@@ -116,7 +117,7 @@ const getTextBoundaryAtOffset = (root: HTMLElement, offset: number): [Node, numb
     const element = node as HTMLElement;
     if (element.tagName === "BR") {
       const parent = node.parentNode ?? root;
-      const index = Array.from(parent.childNodes).indexOf(node);
+      const index = Array.from(parent.childNodes).findIndex((child) => child.isSameNode(node));
       return [parent, Math.max(0, index + 1)];
     }
 

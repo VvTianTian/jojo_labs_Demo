@@ -775,7 +775,7 @@ export function AnimationBookEditor() {
 
   const updateElementGeometry = (elementId: string, patch: Partial<Pick<BookElement, "x" | "y" | "width" | "height">> | Partial<Pick<BubbleElement, "direction" | "tailX" | "tailY">>) => {
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
-    if (!element || currentPage.kind === "cover" || element.type === "question" || (!isResearch && !["image", "motion", "bubble"].includes(element.type))) return;
+    if (!element || currentPage.kind === "cover" || element.type === "question" || (!isResearch && !["image", "motion", "bubble", "text"].includes(element.type))) return;
     modifyCurrentPage((page) =>
       replaceElement(page, elementId, (candidate) => ({ ...candidate, ...patch } as BookElement)),
     );
@@ -1334,7 +1334,7 @@ export function AnimationBookEditor() {
       setSelectedId(element.id);
       return;
     }
-    if ((mode === "tail" && element.type !== "bubble") || (!isResearch && !["image", "motion", "bubble"].includes(element.type))) {
+    if ((mode === "tail" && element.type !== "bubble") || (!isResearch && !["image", "motion", "bubble", "text"].includes(element.type))) {
       setSelectedId(element.id);
       return;
     }
@@ -1665,7 +1665,7 @@ export function AnimationBookEditor() {
             <>
               <div className="ab-stage-scroll">
                 <div className="ab-canvas-zone">
-                  <div className="ab-editor-sticky-toolbar">
+                  {isResearch && <div className="ab-editor-sticky-toolbar">
                     <div className="ab-editor-toolbar" aria-label={isResearch ? "编辑画布工具" : "制作工具"}>
                       {isResearch && (
                         <div className="ab-editor-toolbar-group ab-editor-history" aria-label="编辑历史">
@@ -1725,7 +1725,7 @@ export function AnimationBookEditor() {
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </div>}
 
                   {currentPage.kind === "cover" && (
                     <CoverLayoutConfig
@@ -1801,7 +1801,7 @@ export function AnimationBookEditor() {
                             canEditText={isResearch && currentPage.kind === "page"}
                             isBodyText={currentPage?.kind === "page"}
                             autoHeightResizeActive={autoHeightElementId === element.id}
-                            canEditGeometry={currentPage.kind === "page" && element.type !== "question" && (isResearch || ["image", "motion", "bubble"].includes(element.type))}
+                            canEditGeometry={currentPage.kind === "page" && element.type !== "question" && (isResearch || ["image", "motion", "bubble", "text"].includes(element.type))}
                             canUploadImage={!isResearch && element.type === "image"}
                             onRequestImageUpload={() => requestImageUpload(element.id)}
                             onDeleteImage={() => clearImageAsset(element.id)}
@@ -2419,12 +2419,13 @@ function CanvasElement({
   const lastMeasuredWidthRef = useRef<number | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const pointerMovedRef = useRef(false);
+  const editableElementContent = element.type === "text" || element.type === "bubble" ? element.content : "";
 
   useLayoutEffect(() => {
     if (!editing || !canEditText || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
     writePlainTextToContentEditable(
       textContentRef.current,
-      element.content,
+      editableElementContent,
       element.type === "text" ? TEXT_ELEMENT_PLACEHOLDER : BUBBLE_ELEMENT_PLACEHOLDER,
     );
     textContentRef.current.focus();
@@ -2432,15 +2433,19 @@ function CanvasElement({
       selectTextRange(textContentRef.current, textSelection);
       return;
     }
-    setTextCaret(textContentRef.current, element.content.length);
+    setTextCaret(textContentRef.current, editableElementContent.length);
+    // Content and selection are intentionally excluded: this initializes the uncontrolled editor only on edit entry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canEditText, editing, element.id, element.type]);
 
   useLayoutEffect(() => {
-    if (!autoHeightResizeActive) {
+    const isEditingBodyText = element.type === "text" && isBodyText && editing && canEditText;
+    if (!autoHeightResizeActive && !isEditingBodyText) {
       lastMeasuredWidthRef.current = element.type === "text" ? element.width : null;
       return;
     }
-    if (element.type !== "text" || !canEditGeometry || lastMeasuredWidthRef.current === element.width) return;
+    if (element.type !== "text" || !canEditGeometry) return;
+    if (autoHeightResizeActive && !isEditingBodyText && lastMeasuredWidthRef.current === element.width) return;
     const canvas = elementRef.current?.closest<HTMLElement>(".ab-canvas");
     const content = elementRef.current?.querySelector<HTMLElement>(".ab-canvas-text-content");
     const canvasHeight = canvas?.getBoundingClientRect().height ?? 0;
@@ -2450,7 +2455,7 @@ function CanvasElement({
     content.style.height = "auto";
     const contentHeight = content.scrollHeight;
     content.style.height = previousHeight;
-    lastMeasuredWidthRef.current = element.width;
+    if (autoHeightResizeActive) lastMeasuredWidthRef.current = element.width;
 
     const nextHeight = Math.max(54, Math.ceil(contentHeight * (CANVAS_HEIGHT / canvasHeight)));
     if (Number.isFinite(nextHeight) && Math.abs(nextHeight - element.height) > 1) {
@@ -2458,10 +2463,14 @@ function CanvasElement({
     }
   }, [
     autoHeightResizeActive,
+    canEditText,
     canEditGeometry,
+    editing,
+    editableElementContent,
     element.height,
     element.type,
     element.width,
+    isBodyText,
     onAutoHeightChange,
   ]);
 
@@ -2964,8 +2973,14 @@ function CoverTextSlot({
   const isComposingRef = useRef(false);
   const value = element.content;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!contentRef.current || (editing && research)) return;
+    if (contentRef.current.textContent !== value) contentRef.current.textContent = value;
+  }, [editing, research, value]);
+
+  useLayoutEffect(() => {
     if (!editing || !research || !contentRef.current) return;
+    if (contentRef.current.textContent !== value) contentRef.current.textContent = value;
     contentRef.current.focus();
     const selection = window.getSelection();
     if (!selection) return;
@@ -2974,12 +2989,9 @@ function CoverTextSlot({
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
+  // Content is intentionally excluded: this initializes the uncontrolled editor only on edit entry.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, research]);
-
-  useEffect(() => {
-    if (!contentRef.current || editing) return;
-    if (contentRef.current.textContent !== value) contentRef.current.textContent = value;
-  }, [editing, value]);
 
   if (!field) return null;
   const geometry = COVER_TEXT_GEOMETRY[field];
@@ -2988,7 +3000,10 @@ function CoverTextSlot({
   const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
     const nativeEvent = event.nativeEvent as InputEvent;
     if (isComposingRef.current || nativeEvent.isComposing) return;
-    onChange(event.currentTarget.textContent ?? "");
+    const rawContent = (event.currentTarget.textContent ?? "").replace(/\u00a0/g, " ");
+    const nextContent = rawContent.trim() ? rawContent : "";
+    if (!nextContent) event.currentTarget.replaceChildren();
+    onChange(nextContent);
   };
 
   const content = (
@@ -3001,7 +3016,10 @@ function CoverTextSlot({
       onCompositionStart={() => { isComposingRef.current = true; }}
       onCompositionEnd={(event: React.CompositionEvent<HTMLDivElement>) => {
         isComposingRef.current = false;
-        onChange(event.currentTarget.textContent ?? "");
+        const rawContent = (event.currentTarget.textContent ?? "").replace(/\u00a0/g, " ");
+        const nextContent = rawContent.trim() ? rawContent : "";
+        if (!nextContent) event.currentTarget.replaceChildren();
+        onChange(nextContent);
       }}
       onInput={handleInput}
       onBlur={onEndEdit}
@@ -3013,7 +3031,7 @@ function CoverTextSlot({
         }
       }}
     >
-      {value}
+      {!editing && value}
     </div>
   );
 
