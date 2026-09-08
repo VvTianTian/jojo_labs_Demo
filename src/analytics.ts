@@ -1,4 +1,4 @@
-const DEFAULT_MEASUREMENT_ID = 'G-R3N809EVB6';
+const DEFAULT_MEASUREMENT_ID = 'G-4TLWC57PQ4';
 const measurementId = import.meta.env.VITE_GA_MEASUREMENT_ID || DEFAULT_MEASUREMENT_ID;
 const scriptId = 'google-analytics-script';
 
