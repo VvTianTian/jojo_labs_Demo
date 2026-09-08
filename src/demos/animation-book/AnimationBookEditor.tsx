@@ -1,3 +1,4 @@
+import { participatesInPlayback } from "./types";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
@@ -14,7 +15,6 @@ import {
   ChevronUp,
   ClipboardList,
   CircleX,
-  CircleHelp,
   Eye,
   EyeOff,
   FileAudio,
@@ -45,7 +45,7 @@ import {
   Italic,
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { getElementLabel, initialAnimationBook } from "./data";
+import { BUBBLE_DEFAULT_GEOMETRY, getElementLabel, initialAnimationBook, normalizeAnimationBook } from "./data";
 import {
   ANNOTATION_LABELS,
   buildAnnotationSegments,
@@ -79,6 +79,8 @@ import {
   type ProductionRequirement,
   type PlaybackDisplayMode,
   type PlaybackOrderItem,
+  type InteractionElement,
+  type InteractionDraft,
   type QuestionElement,
   type QuestionOption,
   type RequirementType,
@@ -90,10 +92,12 @@ import {
 import "./animation-book.css";
 
 type ViewId = "cover" | string;
-type PanelTab = "properties" | "requirements" | AnnotationPanelTab;
+type PanelTab = "requirements" | AnnotationPanelTab;
+const getDefaultPanelTab = (role: UserRole): PanelTab => role === "research" ? "voice" : "requirements";
 type CanvasRequirementMode = "editing" | "preview";
 type CanvasRequirementModes = Record<string, CanvasRequirementMode>;
 type ResizeCorner = "top-left" | "top-right" | "middle-left" | "middle-right" | "bottom-left" | "bottom-right";
+type ElementGeometryPatch = Partial<Pick<BookElement, "x" | "y" | "width" | "height">> & Partial<Pick<BubbleElement, "widthMode" | "tailAngle">>;
 
 interface PointerDrag {
   id: string;
@@ -142,6 +146,11 @@ const BODY_TEXT_FONT_FAMILY = '"PingFang SC", "PingFang TC", -apple-system, Blin
 const BODY_TEXT_PARAGRAPH_INDENT = "32px";
 const TEXT_ELEMENT_PLACEHOLDER = "双击编辑文字";
 const BUBBLE_ELEMENT_PLACEHOLDER = "请输入对话";
+const BUBBLE_EDITOR_SCALE = CANVAS_WIDTH / EDITOR_WIDTH;
+const BUBBLE_MIN_WIDTH = BUBBLE_DEFAULT_GEOMETRY.width;
+const BUBBLE_MIN_HEIGHT = BUBBLE_DEFAULT_GEOMETRY.height;
+const BUBBLE_OUTER_CHROME_PX = 8;
+const BUBBLE_NATURAL_WIDTH_BUFFER_PX = 4;
 const QUESTION_CANVAS_X = 1044;
 const QUESTION_CANVAS_Y = 198;
 const QUESTION_CANVAS_WIDTH = 540;
@@ -161,10 +170,26 @@ const COVER_TEXT_GEOMETRY: Record<CoverTextField, { x: number; y: number; width:
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
+const normalizeAngle = (angle: number) => ((angle % 360) + 360) % 360;
+
+const getBubbleTailPosition = (width: number, height: number, angle: number) => {
+  const radians = normalizeAngle(angle) * (Math.PI / 180);
+  const dx = Math.cos(radians);
+  const dy = Math.sin(radians);
+  const halfWidth = Math.max(width / 2, 1);
+  const halfHeight = Math.max(height / 2, 1);
+  const distance = 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
+  return {
+    left: clamp(50 + ((dx * distance) / width) * 100, 0, 100),
+    top: clamp(50 + ((dy * distance) / height) * 100, 0, 100),
+  };
+};
+
 const elementName = (element: BookElement) => {
   if (element.type === "text") return element.content.split("\n")[0] || "未命名文本";
   if (element.type === "image") return element.alt || "未命名图片";
   if (element.type === "motion") return element.fileName || "未命名动效";
+  if (element.type === "interaction") return element.title || "投票互动";
   if (element.type === "question") return element.stem.split("\n")[0] || "题目";
   return element.content.split("\n")[0] || "未命名气泡";
 };
@@ -236,19 +261,18 @@ const createVisualRequirement = (element: ImageElement | MotionElement): Product
   status: "pending",
 });
 
-const isEmptyVisualRequirement = (requirement: ProductionRequirement) =>
-  (requirement.type === "image" || requirement.type === "motion") &&
-  requirement.target?.kind === "element" &&
-  !requirement.brief.text.trim() &&
-  !/<img\b/i.test(requirement.brief.html);
-
 const getDefaultCanvasRequirementModes = (
   page: AnimationBookPage | undefined,
-  role: UserRole = "research",
 ): CanvasRequirementModes =>
   Object.fromEntries(
     (page?.requirements ?? [])
-      .filter((requirement) => isEmptyVisualRequirement(requirement) || role === "production" && !requirement.asset)
+      .filter((requirement) => {
+        if (requirement.type !== "image" && requirement.type !== "motion") return false;
+        if (requirement.target?.kind !== "element") return false;
+        const targetElement = page?.elements.find((element) => element.id === requirement.target?.elementId);
+        if (!targetElement || (targetElement.type !== "image" && targetElement.type !== "motion")) return false;
+        return targetElement.type === requirement.type && !targetElement.src;
+      })
       .map((requirement) => [requirement.id, "preview" as const]),
   );
 
@@ -276,7 +300,7 @@ const getVoiceItems = (page: AnimationBookPage): VoiceItem[] => {
 };
 
 const createPlaybackOrder = (elements: BookElement[]): PlaybackOrderItem[] => elements
-  .filter((element) => element.type !== "question")
+  .filter((element) => participatesInPlayback(element))
   .map((element) => ({
     elementId: element.id,
     displayMode: "always",
@@ -284,7 +308,7 @@ const createPlaybackOrder = (elements: BookElement[]): PlaybackOrderItem[] => el
 
 const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] => {
   const elementsById = new Map(page.elements
-    .filter((element) => element.type !== "question")
+    .filter((element) => participatesInPlayback(element))
     .map((element) => [element.id, element]));
   const rawItems = (page.playbackOrder ?? []) as Array<PlaybackOrderItem | string>;
   const normalized = rawItems
@@ -301,7 +325,7 @@ const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] =>
   return [
     ...uniqueItems,
     ...page.elements
-      .filter((element) => element.type !== "question" && !existingIds.has(element.id))
+      .filter((element) => participatesInPlayback(element) && !existingIds.has(element.id))
       .map((element) => ({ elementId: element.id, displayMode: "always" as const })),
   ];
 };
@@ -311,32 +335,34 @@ const needsDeleteConfirmation = (element: BookElement) =>
   (element.type === "bubble" && element.content.trim().length > 0) ||
   (element.type === "image" && element.src.trim().length > 0) ||
   (element.type === "motion" && Boolean(element.src)) ||
-  element.type === "question";
+  element.type === "question" || element.type === "interaction";
 
 export function AnimationBookEditor() {
-  const [book, setBook] = useState<AnimationBook>(() => structuredClone(initialAnimationBook));
+  const [book, setBook] = useState<AnimationBook>(() => structuredClone(normalizeAnimationBook(initialAnimationBook)));
   const [role, setRole] = useState<UserRole>("research");
   const [viewId, setViewId] = useState<ViewId>("page-1");
-  const [selectedId, setSelectedId] = useState<string | null>("page-1-text");
-  const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>("page-1-image-brief");
-  const [editingTextId, setEditingTextId] = useState<string | null>("page-1-text");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedRequirementId, setSelectedRequirementId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [canvasRequirementModes, setCanvasRequirementModes] = useState<CanvasRequirementModes>(() =>
     getDefaultCanvasRequirementModes(initialAnimationBook.pages[0]),
   );
-  const [panelTab, setPanelTab] = useState<PanelTab>("voice");
+  const [panelTab, setPanelTab] = useState<PanelTab>(() => getDefaultPanelTab("research"));
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; position: PageDropPosition } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [pendingCoverChange, setPendingCoverChange] = useState<{ kind: "layout"; value: CoverLayout } | { kind: "media"; value: "image" | "motion" } | null>(null);
+  const coverConfirmRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (pendingCoverChange) coverConfirmRef.current?.showModal();
+    else coverConfirmRef.current?.close();
+  }, [pendingCoverChange]);
   const [pendingPageDelete, setPendingPageDelete] = useState<PendingPageDelete | null>(null);
   const [pendingAnnotationDelete, setPendingAnnotationDelete] = useState<PendingAnnotationDelete | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
-  const [textSelection, setTextSelection] = useState<(TextSelectionRange & { elementId: string }) | null>({
-    elementId: "page-1-text",
-    start: 0,
-    end: 4,
-  });
+  const [textSelection, setTextSelection] = useState<(TextSelectionRange & { elementId: string }) | null>(null);
   const [showBasicInfo, setShowBasicInfo] = useState(false);
   const [backgroundMusicChoice, setBackgroundMusicChoice] = useState("spring");
   const [backgroundMusicStyle, setBackgroundMusicStyle] = useState("安静");
@@ -349,14 +375,17 @@ export function AnimationBookEditor() {
   const [coverMediaUploadTargetId, setCoverMediaUploadTargetId] = useState<string | null>(null);
   const [coverMediaUploadAccept, setCoverMediaUploadAccept] = useState("image/*");
   const pointerDragRef = useRef<PointerDrag | null>(null);
+  const bubbleNaturalWidthRef = useRef<Record<string, number>>({});
 
   const currentPage = getPage(book, viewId);
   const isResearch = role === "research";
   const selectedElement = currentPage?.elements.find((element) => element.id === selectedId) ?? null;
   const currentQuestion = currentPage?.elements.find(
-    (element): element is QuestionElement => element.type === "question",
+    (element): element is QuestionElement | InteractionElement => element.type === "question" || element.type === "interaction",
   ) ?? null;
-  const hasQuestion = Boolean(currentQuestion);
+  const hasQuestion = currentQuestion?.type === "question";
+  const hasInteraction = currentQuestion?.type === "interaction";
+  const interactionBaselines = useRef(new Map<string, InteractionDraft>());
   const isTextToolActive = isResearch && selectedElement?.type === "text" && editingTextId === selectedElement.id;
   const sortedElements = useMemo(
     () => [...(currentPage?.elements ?? [])]
@@ -392,10 +421,13 @@ export function AnimationBookEditor() {
     window.setTimeout(() => setToast(null), 2200);
   };
 
-  const changeCoverLayout = (layout: CoverLayout) => {
+  const changeCoverLayout = (layout: CoverLayout, confirmed = false) => {
     if (!isResearch || layout === book.coverLayout) return;
     const hasText = book.cover.elements.some((element) => element.type === "text" && element.content.trim());
-    if (layout === "fullscreen" && hasText && !window.confirm("切换为全屏布局将清空封面文字内容，是否继续？")) return;
+    if (layout === "fullscreen" && hasText && !confirmed) {
+      setPendingCoverChange({ kind: "layout", value: layout });
+      return;
+    }
     const currentMediaType = book.cover.elements.some(
       (element) => element.id === "cover-motion" && element.hidden !== true,
     ) ? "motion" : "image";
@@ -426,11 +458,14 @@ export function AnimationBookEditor() {
     setEditingTextId(null);
   };
 
-  const changeCoverMedia = (type: "image" | "motion") => {
+  const changeCoverMedia = (type: "image" | "motion", confirmed = false) => {
     if (!isResearch || book.coverLayout !== "fullscreen") return;
     const current = book.cover.elements.find((element) => element.id === "cover-motion" && element.hidden !== true) ? "motion" : "image";
     if (current === type) return;
-    if (!window.confirm("切换媒体类型将清空当前封面媒体及对应需求，是否继续？")) return;
+    if (!confirmed) {
+      setPendingCoverChange({ kind: "media", value: type });
+      return;
+    }
     setBook((previous) => ({ ...previous, cover: {
       ...previous.cover,
       elements: previous.cover.elements.map((element) => element.id === "cover-image" && element.type === "image"
@@ -454,7 +489,7 @@ export function AnimationBookEditor() {
     setSelectedId(nextVisibleElement?.id ?? null);
     setSelectedRequirementId(nextPage?.requirements[0]?.id ?? null);
     setEditingTextId(null);
-    setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage, role));
+    setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage));
     setPendingDelete(null);
     setPendingPageDelete(null);
     setPendingAnnotationDelete(null);
@@ -462,20 +497,19 @@ export function AnimationBookEditor() {
     setTextSelection(null);
     setShowBasicInfo(false);
     const defaultText = nextPage?.elements.find((element): element is TextElement => element.type === "text");
+    setPanelTab(getDefaultPanelTab(role));
     if (role === "research" && nextPage?.kind === "page" && defaultText && defaultText.content.length > 0) {
       setSelectedId(defaultText.id);
       setEditingTextId(defaultText.id);
       setTextSelection({ elementId: defaultText.id, start: 0, end: Math.min(4, defaultText.content.length) });
-      setPanelTab("voice");
-    } else {
-      setPanelTab(role === "research" ? "properties" : "requirements");
     }
   };
 
   const selectRole = (nextRole: UserRole) => {
     setRole(nextRole);
+    setPanelTab(getDefaultPanelTab(nextRole));
     setEditingTextId(null);
-    setCanvasRequirementModes(getDefaultCanvasRequirementModes(currentPage, nextRole));
+    setCanvasRequirementModes(getDefaultCanvasRequirementModes(currentPage));
     setPendingDelete(null);
     setPendingPageDelete(null);
     setPendingAnnotationDelete(null);
@@ -489,9 +523,6 @@ export function AnimationBookEditor() {
         setEditingTextId(defaultText.id);
         setTextSelection({ elementId: defaultText.id, start: 0, end: Math.min(4, defaultText.content.length) });
       }
-      setPanelTab("voice");
-    } else {
-      setPanelTab("requirements");
     }
     if (nextRole === "production") setSelectedRequirementId(currentPage?.requirements[0]?.id ?? null);
   };
@@ -543,7 +574,7 @@ export function AnimationBookEditor() {
     finishActiveCanvasRequirementEdit();
     setSelectedId(elementId);
     const nextElement = currentPage?.elements.find((element) => element.id === elementId);
-    if (nextElement?.type === "question") setPanelTab("question");
+    if ((nextElement?.type === "question" || nextElement?.type === "interaction")) setPanelTab("question");
     if (nextElement?.type !== "text") {
       setTextSelection(null);
       setSelectedAnnotationId(null);
@@ -564,6 +595,21 @@ export function AnimationBookEditor() {
     setSelectedRequirementId(requirement.id);
     const currentMode = canvasRequirementModes[requirement.id];
     setCanvasRequirementMode(requirement.id, currentMode ? null : "preview");
+  };
+
+  const openElementRequirementPanel = (element: BookElement) => {
+    if (element.type !== "image" && element.type !== "motion") return;
+    const currentRequirement = getVisualRequirement(currentPage, element);
+    const requirement = currentRequirement ?? createVisualRequirement(element);
+    if (!currentRequirement) {
+      modifyCurrentPage((page) => ({
+        ...page,
+        requirements: [...page.requirements, requirement],
+      }));
+    }
+    setSelectedId(element.id);
+    setSelectedRequirementId(requirement.id);
+    setPanelTab("requirements");
   };
 
   const updateCanvasRequirement = (requirementId: string, brief: ProductionRequirement["brief"]) => {
@@ -773,16 +819,12 @@ export function AnimationBookEditor() {
     if (annotation) updateAnnotation(annotationId, { voiceRequest: annotation.text });
   };
 
-  const updateElementGeometry = (elementId: string, patch: Partial<Pick<BookElement, "x" | "y" | "width" | "height">> | Partial<Pick<BubbleElement, "direction" | "tailX" | "tailY">>) => {
+  const updateElementGeometry = (elementId: string, patch: ElementGeometryPatch) => {
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
-    if (!element || currentPage.kind === "cover" || element.type === "question" || (!isResearch && !["image", "motion", "bubble", "text"].includes(element.type))) return;
+    if (!element || currentPage.kind === "cover" || (element.type === "question" || element.type === "interaction") || (!isResearch && !["image", "motion", "bubble", "text"].includes(element.type))) return;
     modifyCurrentPage((page) =>
       replaceElement(page, elementId, (candidate) => ({ ...candidate, ...patch } as BookElement)),
     );
-  };
-
-  const updateSelectedElement = (patch: Partial<BookElement>) => {
-    if (selectedId) updateElementGeometry(selectedId, patch as Pick<BookElement, "x" | "y" | "width" | "height">);
   };
 
   const addElement = (element: BookElement) => {
@@ -798,7 +840,7 @@ export function AnimationBookEditor() {
       requirements: visualRequirement
         ? [...page.requirements, visualRequirement]
         : page.requirements,
-      playbackOrder: page.kind === "page" && elementToAdd.type !== "question"
+      playbackOrder: page.kind === "page" && participatesInPlayback(elementToAdd)
         ? [...normalizePlaybackOrder(page), {
             elementId: elementToAdd.id,
             displayMode: "always" as const,
@@ -806,7 +848,7 @@ export function AnimationBookEditor() {
         : page.playbackOrder,
     }));
     setSelectedId(elementToAdd.id);
-    setEditingTextId(elementToAdd.type === "bubble" ? elementToAdd.id : null);
+    setEditingTextId(elementToAdd.type === "text" ? elementToAdd.id : null);
     if (visualRequirement) {
       setSelectedRequirementId(visualRequirement.id);
       setCanvasRequirementMode(visualRequirement.id, "preview");
@@ -814,7 +856,7 @@ export function AnimationBookEditor() {
     setSelectedAnnotationId(null);
     setTextSelection(null);
     if (elementToAdd.type === "text" || elementToAdd.type === "bubble") setPanelTab("voice");
-    if (elementToAdd.type === "question") setPanelTab("question");
+    if ((elementToAdd.type === "question" || elementToAdd.type === "interaction")) setPanelTab("question");
   };
 
   const addText = () => {
@@ -842,13 +884,9 @@ export function AnimationBookEditor() {
       type: "bubble",
       x: 820,
       y: 620,
-      width: 420,
-      height: 150,
       zIndex: Math.max(0, ...currentPage.elements.map((element) => element.zIndex)) + 1,
       content: "",
-      direction: "left",
-      tailX: 8,
-      tailY: 68,
+      ...BUBBLE_DEFAULT_GEOMETRY,
       audioUrl: null,
       voiceSupplement: "",
     });
@@ -890,6 +928,7 @@ export function AnimationBookEditor() {
 
   const addQuestion = () => {
     if (!isResearch || currentPage.kind !== "page") return;
+    if (currentQuestion?.type === "interaction") return;
     if (currentQuestion) {
       selectElement(currentQuestion.id);
       setPanelTab("question");
@@ -918,11 +957,51 @@ export function AnimationBookEditor() {
 
   const addInteraction = () => {
     if (!isResearch || currentPage.kind !== "page" || hasQuestion) return;
-    notify("互动功能将在下一版本开放");
+    if (currentQuestion) { selectElement(currentQuestion.id); setPanelTab("question"); return; }
+    addElement({
+      id: createId("interaction"), type: "interaction", title: "",
+      x: 1044, y: 197.7235107421875, width: 540, height: 380,
+      zIndex: Math.max(0, ...currentPage.elements.map((element) => element.zIndex)) + 1,
+      audioUrl: null, voiceSupplement: "",
+      options: [
+        { id: createId("vote-option"), content: "", proportion: "large" },
+        { id: createId("vote-option"), content: "", proportion: "small" },
+      ],
+    });
   };
 
-  const requestAudioUpload = () => {
-    notify(isResearch ? "音频产物由制作人员上传" : "请在需求 / 产物面板上传音频");
+  const updateInteraction = (elementId: string, patch: Partial<InteractionDraft>) => {
+    if (!isResearch) return;
+    const element = currentPage.elements.find((item) => item.id === elementId);
+    if (element?.type !== "interaction") return;
+    if (!interactionBaselines.current.has(elementId)) {
+      interactionBaselines.current.set(elementId, structuredClone({ title: element.title, options: element.options, voiceSupplement: element.voiceSupplement }));
+    }
+    const title = Array.from(patch.title ?? element.title).slice(0, 18).join("");
+    const options = (patch.options ?? element.options).map((option) => ({ ...option, content: Array.from(option.content).slice(0, 9).join("") })) as InteractionElement["options"];
+    modifyCurrentPage((page) => replaceElement(page, elementId, (item) => item.type === "interaction"
+      ? { ...item, ...patch, title, options, height: Array.from(title).length > 10 ? 440 : 380 } : item));
+  };
+
+  const cancelInteraction = (elementId: string) => {
+    if (!isResearch) return;
+    const baseline = interactionBaselines.current.get(elementId);
+    if (!baseline) return;
+    modifyCurrentPage((page) => replaceElement(page, elementId, (item) => item.type === "interaction"
+      ? { ...item, ...structuredClone(baseline), height: Array.from(baseline.title).length > 10 ? 440 : 380 } : item));
+    interactionBaselines.current.delete(elementId);
+    notify("已取消互动修改");
+  };
+
+  const saveInteraction = (elementId: string) => {
+    if (!isResearch) return;
+    const element = currentPage.elements.find((item) => item.id === elementId);
+    if (element?.type !== "interaction") return;
+    if (!element.title.trim() || element.options.some((option) => !option.content.trim())) {
+      notify("请填写投票标题和两个选项"); return;
+    }
+    interactionBaselines.current.delete(elementId);
+    notify("互动已保存");
   };
 
   const updateRequirement = (requirementId: string, patch: Partial<ProductionRequirement>) => {
@@ -1129,6 +1208,10 @@ export function AnimationBookEditor() {
 
   const clearMotionAsset = (elementId: string) => {
     if (isResearch) return;
+    const motionElement = currentPage?.elements.find(
+      (element): element is MotionElement => element.id === elementId && element.type === "motion",
+    );
+    const requirementId = motionElement ? getVisualRequirement(currentPage, motionElement)?.id ?? null : null;
     modifyCurrentPage((page) => {
       const motionElement = page.elements.find(
         (element): element is MotionElement => element.id === elementId && element.type === "motion",
@@ -1146,9 +1229,10 @@ export function AnimationBookEditor() {
           ? page.requirements.map((candidate) => candidate.id === requirement.id
             ? { ...candidate, asset: null, status: "pending" as const, errorMessage: undefined }
             : candidate)
-          : page.requirements,
+        : page.requirements,
       };
     });
+    if (requirementId) setCanvasRequirementMode(requirementId, "preview");
     setSelectedId(elementId);
     notify("动效已删除，可重新上传");
   };
@@ -1174,7 +1258,8 @@ export function AnimationBookEditor() {
     setSelectedAnnotationId(null);
     setTextSelection(null);
     setPendingDelete(null);
-    if (removedElement?.type === "question") setPanelTab("voice");
+    if (removedElement?.type === "interaction") interactionBaselines.current.delete(elementId);
+    if ((removedElement?.type === "question" || removedElement?.type === "interaction")) setPanelTab("voice");
   };
 
   const requestRemoveElement = (elementId: string) => {
@@ -1213,6 +1298,9 @@ export function AnimationBookEditor() {
     newPage.playbackOrder = createPlaybackOrder(newPage.elements);
     setBook((previous) => ({ ...previous, pages: [...previous.pages, newPage] }));
     setViewId(id);
+    setPanelTab(getDefaultPanelTab(role));
+    setSelectedAnnotationId(null);
+    setTextSelection(null);
     setSelectedId(null);
     setSelectedRequirementId(null);
     setCanvasRequirementModes({});
@@ -1237,10 +1325,11 @@ export function AnimationBookEditor() {
         .map((page, pageIndex) => ({ ...page, label: `正文 ${pageIndex + 1}` })),
     }));
     if (isCurrentPage) {
+      setPanelTab(getDefaultPanelTab(role));
       setViewId(nextPage?.id ?? "cover");
       setSelectedId(nextPage?.elements[0]?.id ?? null);
       setSelectedRequirementId(nextPage?.requirements[0]?.id ?? null);
-      setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage, role));
+      setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage));
       setEditingTextId(null);
       setSelectedAnnotationId(null);
       setTextSelection(null);
@@ -1340,7 +1429,7 @@ export function AnimationBookEditor() {
     }
     event.currentTarget.setPointerCapture(event.pointerId);
     setAutoHeightElementId(
-      mode === "resize" && element.type === "text" && (corner === "middle-left" || corner === "middle-right")
+      mode === "resize" && (element.type === "text" || element.type === "bubble") && (corner === "middle-left" || corner === "middle-right")
         ? element.id
         : null,
     );
@@ -1371,12 +1460,15 @@ export function AnimationBookEditor() {
     const deltaY = (event.clientY - drag.pointerY) * scaleY;
     const draggedElement = currentPage?.elements.find((element) => element.id === drag.id);
     if (drag.mode === "tail" && draggedElement?.type === "bubble") {
-      const tailX = clamp((((event.clientX - rect.left) * scaleX) - draggedElement.x) / draggedElement.width * 100, 0, 100);
-      const tailY = clamp((((event.clientY - rect.top) * scaleY) - draggedElement.y) / draggedElement.height * 100, 0, 100);
-      updateElementGeometry(drag.id, { tailX, tailY });
+      const pointerX = (event.clientX - rect.left) * scaleX;
+      const pointerY = (event.clientY - rect.top) * scaleY;
+      const centerX = draggedElement.x + draggedElement.width / 2;
+      const centerY = draggedElement.y + draggedElement.height / 2;
+      const tailAngle = normalizeAngle(Math.atan2(pointerY - centerY, pointerX - centerX) * (180 / Math.PI));
+      updateElementGeometry(drag.id, { tailAngle });
       return;
     }
-    const minWidth = 80;
+    const minWidth = draggedElement?.type === "bubble" ? BUBBLE_MIN_WIDTH : 80;
     const minHeight = 54;
     const next = {
       x: drag.origin.x,
@@ -1389,27 +1481,47 @@ export function AnimationBookEditor() {
       next.x = clamp(drag.origin.x + deltaX, 0, CANVAS_WIDTH - drag.origin.width);
       next.y = clamp(drag.origin.y + deltaY, 0, CANVAS_HEIGHT - drag.origin.height);
     } else if (drag.corner) {
-      const fromLeft = drag.corner.includes("left");
-      const fromTop = drag.corner.includes("top");
-      const isHorizontalResize = drag.corner === "middle-left" || drag.corner === "middle-right";
-      const right = drag.origin.x + drag.origin.width;
-      const bottom = drag.origin.y + drag.origin.height;
-      if (fromLeft) {
-        next.x = clamp(drag.origin.x + deltaX, 0, right - minWidth);
-        next.width = right - next.x;
-      } else {
-        next.width = clamp(drag.origin.width + deltaX, minWidth, CANVAS_WIDTH - drag.origin.x);
-      }
-      if (!isHorizontalResize) {
-        if (fromTop) {
-          next.y = clamp(drag.origin.y + deltaY, 0, bottom - minHeight);
-          next.height = bottom - next.y;
+      if (draggedElement?.type === "bubble") {
+        const right = drag.origin.x + drag.origin.width;
+        const naturalWidth = draggedElement.content.trim()
+          ? (bubbleNaturalWidthRef.current[draggedElement.id] ?? Number.POSITIVE_INFINITY)
+          : Number.POSITIVE_INFINITY;
+        if (drag.corner === "middle-left") {
+          const maxWidth = Math.min(naturalWidth, right);
+          const safeMinWidth = Math.min(minWidth, maxWidth);
+          next.width = clamp(drag.origin.width - deltaX, safeMinWidth, maxWidth);
+          next.x = right - next.width;
         } else {
-          next.height = clamp(drag.origin.height + deltaY, minHeight, CANVAS_HEIGHT - drag.origin.y);
+          const maxWidth = Math.min(naturalWidth, CANVAS_WIDTH - drag.origin.x);
+          const safeMinWidth = Math.min(minWidth, maxWidth);
+          next.width = clamp(drag.origin.width + deltaX, safeMinWidth, maxWidth);
+        }
+        next.height = drag.origin.height;
+      } else {
+        const fromLeft = drag.corner.includes("left");
+        const fromTop = drag.corner.includes("top");
+        const isHorizontalResize = drag.corner === "middle-left" || drag.corner === "middle-right";
+        const right = drag.origin.x + drag.origin.width;
+        const bottom = drag.origin.y + drag.origin.height;
+        if (fromLeft) {
+          next.x = clamp(drag.origin.x + deltaX, 0, right - minWidth);
+          next.width = right - next.x;
+        } else {
+          next.width = clamp(drag.origin.width + deltaX, minWidth, CANVAS_WIDTH - drag.origin.x);
+        }
+        if (!isHorizontalResize) {
+          if (fromTop) {
+            next.y = clamp(drag.origin.y + deltaY, 0, bottom - minHeight);
+            next.height = bottom - next.y;
+          } else {
+            next.height = clamp(drag.origin.height + deltaY, minHeight, CANVAS_HEIGHT - drag.origin.y);
+          }
         }
       }
     }
-    updateSelectedElement(next);
+    const geometryPatch: ElementGeometryPatch = next;
+    if (draggedElement?.type === "bubble" && drag.mode === "resize") geometryPatch.widthMode = "manual";
+    updateElementGeometry(drag.id, geometryPatch);
   };
 
   const endPointerDrag = () => {
@@ -1687,13 +1799,14 @@ export function AnimationBookEditor() {
                               icon={<Gamepad2 size={18} />}
                               label={hasQuestion ? "查看或编辑题目" : "添加标准选择题"}
                               displayLabel="题"
-                              active={panelTab === "question"}
-                              disabled={currentPage.kind !== "page"}
+                              active={hasQuestion && panelTab === "question"}
+                              disabled={currentPage.kind !== "page" || hasInteraction}
                               onClick={addQuestion}
                             />
                             <ToolButton
                               icon={<Hand size={18} />}
-                              label={hasQuestion ? "互动入口已被题占用" : "互动（下一版本开放）"}
+                              label={hasQuestion ? "互动入口已被题占用" : hasInteraction ? "查看或编辑互动" : "添加投票互动"}
+                              active={hasInteraction && panelTab === "question"}
                               displayLabel="互动"
                               disabled={currentPage.kind !== "page" || hasQuestion}
                               onClick={addInteraction}
@@ -1792,50 +1905,6 @@ export function AnimationBookEditor() {
                             onRequestUpload={() => requestCoverMediaUpload(element.id)}
                             onDelete={() => element.type === "image" ? clearImageAsset(element.id) : clearMotionAsset(element.id)}
                             onChangeMedia={changeCoverMedia}
-                          />
-                        ) : (
-                          <CanvasElement
-                            element={element}
-                            selected={selectedId === element.id}
-                            editing={editingTextId === element.id}
-                            canEditText={isResearch && currentPage.kind === "page"}
-                            isBodyText={currentPage?.kind === "page"}
-                            autoHeightResizeActive={autoHeightElementId === element.id}
-                            canEditGeometry={currentPage.kind === "page" && element.type !== "question" && (isResearch || ["image", "motion", "bubble", "text"].includes(element.type))}
-                            canUploadImage={!isResearch && element.type === "image"}
-                            onRequestImageUpload={() => requestImageUpload(element.id)}
-                            onDeleteImage={() => clearImageAsset(element.id)}
-                            onSelect={() => selectElement(element.id)}
-                            textSelection={textSelection?.elementId === element.id ? textSelection : undefined}
-                            annotations={isResearch && element.type === "text" ? element.annotations : []}
-                            onTextSelectionChange={(range) => handleTextSelection(element.id, range)}
-                            onRequestDeleteAnnotation={isResearch ? requestRemoveAnnotation : undefined}
-                            onSelectAnnotation={isResearch ? selectAnnotation : undefined}
-                            onBeginTextEdit={() => {
-                              selectElement(element.id);
-                              if (element.type === "text" || element.type === "bubble") setEditingTextId(element.id);
-                            }}
-                            onTextChange={(content) => {
-                              if (element.type === "text") updateTextContent(element.id, content);
-                              else updateElementById(element.id, { content });
-                            }}
-                            onEndTextEdit={() => setEditingTextId(null)}
-                            onAutoHeightChange={(height) => updateElementGeometry(element.id, { height })}
-                            onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
-                          />
-                        )}
-                        {isVisualElement && (
-                          <div
-                            className="ab-canvas-requirement-layer"
-                            style={{
-                              left: `${(element.x / CANVAS_WIDTH) * 100}%`,
-                              top: `${(element.y / CANVAS_HEIGHT) * 100}%`,
-                              width: `${(element.width / CANVAS_WIDTH) * 100}%`,
-                              height: `${(element.height / CANVAS_HEIGHT) * 100}%`,
-                              zIndex: selectedId === element.id
-                                ? 10000
-                                : element.zIndex + 1000,
-                            }}
                           >
                             <CanvasRequirement
                               elementType={element.type}
@@ -1853,7 +1922,91 @@ export function AnimationBookEditor() {
                                 if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
                               }}
                             />
+                          </CoverMediaElement>
+                        ) : isVisualElement ? (
+                          <div
+                            className="ab-canvas-visual-group"
+                            style={{
+                              left: `${(element.x / CANVAS_WIDTH) * 100}%`,
+                              top: `${(element.y / CANVAS_HEIGHT) * 100}%`,
+                              width: `${(element.width / CANVAS_WIDTH) * 100}%`,
+                              height: `${(element.height / CANVAS_HEIGHT) * 100}%`,
+                              zIndex: element.zIndex,
+                            }}
+                          >
+                            <CanvasElement
+                              element={element}
+                              selected={selectedId === element.id}
+                              editing={editingTextId === element.id}
+                              canEditText={isResearch && currentPage.kind === "page"}
+                              isBodyText={false}
+                              autoHeightResizeActive={false}
+                              canEditGeometry={currentPage.kind === "page"}
+                              positionedByParent
+                              canUploadImage={!isResearch && element.type === "image"}
+                              onRequestImageUpload={() => requestImageUpload(element.id)}
+                              onDeleteImage={() => clearImageAsset(element.id)}
+                              onSelect={() => selectElement(element.id)}
+                              annotations={[]}
+                              onBeginTextEdit={() => selectElement(element.id)}
+                              onTextChange={() => undefined}
+                              onEndTextEdit={() => undefined}
+                              onAutoSizeChange={(patch) => updateElementGeometry(element.id, patch)}
+                              onNaturalWidthChange={(width) => { bubbleNaturalWidthRef.current[element.id] = width; }}
+                              onTailAngleChange={(angle) => updateElementGeometry(element.id, { tailAngle: angle })}
+                              onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
+                            />
+                            <div className="ab-canvas-requirement-layer">
+                              <CanvasRequirement
+                                elementType={element.type}
+                                requirement={elementRequirement}
+                                mode={requirementMode}
+                                canEdit={isResearch}
+                                onToggle={() => toggleElementRequirement(element)}
+                                onChange={(brief) => {
+                                  if (elementRequirement) updateCanvasRequirement(elementRequirement.id, brief);
+                                }}
+                                onEdit={() => {
+                                  if (elementRequirement && isResearch) setCanvasRequirementMode(elementRequirement.id, "editing");
+                                }}
+                                onFinishEditing={() => {
+                                  if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
+                                }}
+                              />
+                            </div>
                           </div>
+                        ) : (
+                          <CanvasElement
+                            element={element}
+                            selected={selectedId === element.id}
+                            editing={editingTextId === element.id}
+                            canEditText={isResearch && currentPage.kind === "page"}
+                            isBodyText={currentPage?.kind === "page"}
+                            autoHeightResizeActive={autoHeightElementId === element.id}
+                            canEditGeometry={currentPage.kind === "page" && element.type !== "question" && element.type !== "interaction" && (isResearch || ["image", "motion", "bubble", "text"].includes(element.type))}
+                            canUploadImage={false}
+                            onRequestImageUpload={() => requestImageUpload(element.id)}
+                            onDeleteImage={() => clearImageAsset(element.id)}
+                            onSelect={() => selectElement(element.id)}
+                            textSelection={textSelection?.elementId === element.id ? textSelection : undefined}
+                            annotations={isResearch && element.type === "text" ? element.annotations : []}
+                            onTextSelectionChange={(range) => handleTextSelection(element.id, range)}
+                            onRequestDeleteAnnotation={isResearch ? requestRemoveAnnotation : undefined}
+                            onSelectAnnotation={isResearch ? selectAnnotation : undefined}
+                            onBeginTextEdit={() => {
+                              selectElement(element.id);
+                              if (element.type === "text" || element.type === "bubble") setEditingTextId(element.id);
+                            }}
+                            onTextChange={(content) => {
+                              if (element.type === "text") updateTextContent(element.id, content);
+                              else updateElementById(element.id, { content });
+                            }}
+                            onEndTextEdit={() => setEditingTextId(null)}
+                            onAutoSizeChange={(patch) => updateElementGeometry(element.id, patch)}
+                            onNaturalWidthChange={(width) => { bubbleNaturalWidthRef.current[element.id] = width; }}
+                            onTailAngleChange={(angle) => updateElementGeometry(element.id, { tailAngle: angle })}
+                            onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
+                          />
                         )}
                       </Fragment>
                     );
@@ -1891,6 +2044,7 @@ export function AnimationBookEditor() {
                           onMove={moveLayer}
                           onReorder={reorderLayer}
                           onToggleVisibility={toggleElementVisibility}
+                          onOpenRequirement={openElementRequirementPanel}
                         />
                       )}
                       <button
@@ -1915,7 +2069,6 @@ export function AnimationBookEditor() {
                       {currentQuestion && <span className="ab-canvas-question-badge" aria-label="本页包含题目">题</span>}
                     </div>
                   )}
-                  <div className="ab-canvas-grid-label" aria-hidden="true">640 × 360</div>
                 </div>
                   </div>
                 </div>
@@ -1926,8 +2079,11 @@ export function AnimationBookEditor() {
                   activeTab={panelTab}
                   annotations={currentAnnotations}
                   selectedAnnotationId={selectedAnnotationId}
-                  standardInteractionCount={isResearch ? 1 : 0}
-                  question={currentQuestion}
+                  question={currentQuestion?.type === "question" ? currentQuestion : null}
+                  interaction={currentQuestion?.type === "interaction" ? currentQuestion : null}
+                  onUpdateInteraction={updateInteraction}
+                  onSaveInteraction={saveInteraction}
+                  onCancelInteraction={cancelInteraction}
                   questionOnly={!isResearch}
                   canEditQuestion={isResearch}
                   voiceItems={currentVoiceItems}
@@ -1952,6 +2108,10 @@ export function AnimationBookEditor() {
                     <PanelTabButton active={panelTab === "requirements"} onClick={() => setPanelTab("requirements")} label="制作需求" count={currentPage?.requirements.length} />
                     {currentQuestion && <PanelTabButton active={panelTab === "question"} onClick={() => selectAnnotationTab("question")} label="题" count={1} />}
                   </div>}
+                  {isResearch && currentPage.kind === "page" && panelTab === "requirements" && <div className="ab-panel-tabs" role="tablist" aria-label="编辑设置">
+                    <PanelTabButton active={false} onClick={() => setPanelTab("voice")} label="领读语音" />
+                    <PanelTabButton active label="需求 / 产物" count={currentPage?.requirements.length} onClick={() => setPanelTab("requirements")} />
+                  </div>}
 
                   {currentPage.kind === "cover" && <CoverAudioPanel
                       research={isResearch}
@@ -1960,15 +2120,7 @@ export function AnimationBookEditor() {
                       onSupplement={(brief) => updateRequirement(currentPage.requirements.find((item) => item.type === "audio")?.id ?? "", { supplementalBrief: brief })}
                       onUpload={(file) => { const requirement = currentPage.requirements.find((item) => item.type === "audio"); if (requirement) handleRequirementUpload(requirement.id, file); }}
                     />}
-                  {currentPage.kind === "page" && panelTab === "properties" && <PropertiesPanel
-                      page={currentPage}
-                      selectedId={selectedId}
-                      onSelectElement={selectElement}
-                      onUpdateElement={updateElementById}
-                      onRemoveElement={requestRemoveElement}
-                      onRequestAudioUpload={requestAudioUpload}
-                    />}
-                  {!isResearch && currentPage.kind === "page" && panelTab === "requirements" && (
+                  {currentPage.kind === "page" && panelTab === "requirements" && (
                     <RequirementsPanel
                       page={currentPage}
                       role={role}
@@ -1991,6 +2143,32 @@ export function AnimationBookEditor() {
       </main>
 
       {toast && <div className="ab-toast" role="status"><Check size={15} />{toast}</div>}
+      <dialog
+        ref={coverConfirmRef}
+        className="ab-confirm-dialog ab-cover-confirm-dialog"
+        aria-labelledby="ab-cover-confirm-title"
+        aria-describedby="ab-cover-confirm-description"
+        onCancel={() => setPendingCoverChange(null)}
+        onClick={(event) => { if (event.target === event.currentTarget) setPendingCoverChange(null); }}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <div onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="ab-icon-button" aria-label="关闭确认弹窗" onClick={() => setPendingCoverChange(null)} style={{ float: "right" }}><X size={16} /></button>
+          <div className="ab-confirm-icon"><AlertCircle size={18} /></div>
+          <div className="ab-confirm-copy">
+            <h2 id="ab-cover-confirm-title">{pendingCoverChange?.kind === "layout" ? "切换为全屏布局？" : `切换为${pendingCoverChange?.value === "motion" ? "动效" : "图片"}？`}</h2>
+            <p id="ab-cover-confirm-description">{pendingCoverChange?.kind === "layout" ? "切换后将清空封面文字内容，是否继续？" : "切换后将清空当前封面媒体及对应需求，是否继续？"}</p>
+          </div>
+          <div className="ab-confirm-actions">
+            <button type="button" className="ab-secondary-button" autoFocus onClick={() => setPendingCoverChange(null)}>取消</button>
+            <button type="button" className="ab-primary-button ab-primary-button--danger" onClick={() => {
+              if (pendingCoverChange?.kind === "layout") changeCoverLayout(pendingCoverChange.value, true);
+              else if (pendingCoverChange?.kind === "media") changeCoverMedia(pendingCoverChange.value, true);
+              setPendingCoverChange(null);
+            }}>确认切换</button>
+          </div>
+        </div>
+      </dialog>
       {pendingPageDelete && (
         <div className="ab-confirm-backdrop" role="presentation" onClick={() => setPendingPageDelete(null)}>
           <div className="ab-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="ab-page-delete-title" onClick={(event) => event.stopPropagation()}>
@@ -2012,7 +2190,7 @@ export function AnimationBookEditor() {
             <div className="ab-confirm-icon"><AlertCircle size={18} /></div>
             <div className="ab-confirm-copy">
               <h2 id="ab-delete-title">确认删除{getElementLabel(pendingDelete.type)}？</h2>
-              <p>{pendingDelete.type === "question" ? "删除后题干、选项及题目配置将一并移除，请确认是否继续。" : `当前内容“${pendingDelete.name}”已填充，删除后需要重新添加。`}</p>
+              <p>{(pendingDelete.type === "question" || pendingDelete.type === "interaction") ? "删除后题干、选项及题目配置将一并移除，请确认是否继续。" : `当前内容“${pendingDelete.name}”已填充，删除后需要重新添加。`}</p>
             </div>
             <div className="ab-confirm-actions">
               <button type="button" className="ab-secondary-button" autoFocus onClick={() => setPendingDelete(null)}>取消</button>
@@ -2376,6 +2554,7 @@ function CanvasElement({
   isBodyText,
   autoHeightResizeActive,
   canEditGeometry,
+  positionedByParent = false,
   canUploadImage,
   annotations,
   textSelection,
@@ -2386,7 +2565,9 @@ function CanvasElement({
   onBeginTextEdit,
   onTextChange,
   onEndTextEdit,
-  onAutoHeightChange,
+  onAutoSizeChange,
+  onNaturalWidthChange,
+  onTailAngleChange,
   onRequestImageUpload,
   onDeleteImage,
   onPointerDown,
@@ -2398,6 +2579,7 @@ function CanvasElement({
   isBodyText: boolean;
   autoHeightResizeActive: boolean;
   canEditGeometry: boolean;
+  positionedByParent?: boolean;
   canUploadImage: boolean;
   annotations?: TextAnnotation[];
   textSelection?: TextSelectionRange;
@@ -2408,7 +2590,9 @@ function CanvasElement({
   onBeginTextEdit: () => void;
   onTextChange: (content: string) => void;
   onEndTextEdit: () => void;
-  onAutoHeightChange: (height: number) => void;
+  onAutoSizeChange: (patch: ElementGeometryPatch) => void;
+  onNaturalWidthChange: (width: number) => void;
+  onTailAngleChange: (angle: number) => void;
   onRequestImageUpload: () => void;
   onDeleteImage: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, mode: "move" | "resize" | "tail", corner?: ResizeCorner) => void;
@@ -2417,9 +2601,12 @@ function CanvasElement({
   const textContentRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const lastMeasuredWidthRef = useRef<number | null>(null);
+  const previousBubbleContentRef = useRef<string | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
   const pointerMovedRef = useRef(false);
   const editableElementContent = element.type === "text" || element.type === "bubble" ? element.content : "";
+  const bubbleWidthMode = element.type === "bubble" ? element.widthMode : undefined;
+  const elementX = element.x;
 
   useLayoutEffect(() => {
     if (!editing || !canEditText || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
@@ -2439,28 +2626,100 @@ function CanvasElement({
   }, [canEditText, editing, element.id, element.type]);
 
   useLayoutEffect(() => {
-    const isEditingBodyText = element.type === "text" && isBodyText && editing && canEditText;
-    if (!autoHeightResizeActive && !isEditingBodyText) {
-      lastMeasuredWidthRef.current = element.type === "text" ? element.width : null;
+    const isTextElement = element.type === "text";
+    const isBubbleElement = element.type === "bubble";
+    const bubbleContentChanged = isBubbleElement
+      && previousBubbleContentRef.current !== null
+      && previousBubbleContentRef.current !== editableElementContent;
+    if (isBubbleElement) previousBubbleContentRef.current = editableElementContent;
+
+    const isEditingBodyText = isTextElement && isBodyText && editing && canEditText;
+    const shouldMeasureText = isTextElement && (autoHeightResizeActive || isEditingBodyText);
+    const shouldMeasureBubble = isBubbleElement && canEditGeometry && (autoHeightResizeActive || bubbleContentChanged);
+    if (!isTextElement && !isBubbleElement) return;
+
+    const canvas = elementRef.current?.closest<HTMLElement>(".ab-canvas");
+    const content = elementRef.current?.querySelector<HTMLElement>(
+      isBubbleElement ? ".ab-canvas-bubble-content" : ".ab-canvas-text-content",
+    );
+    if (!content) return;
+
+    let naturalWidth: number | null = null;
+    if (isBubbleElement) {
+      const measurement = content.cloneNode(false) as HTMLElement;
+      measurement.textContent = editableElementContent || BUBBLE_ELEMENT_PLACEHOLDER;
+      measurement.style.position = "fixed";
+      measurement.style.left = "-100000px";
+      measurement.style.top = "0";
+      measurement.style.display = "inline-block";
+      measurement.style.width = "max-content";
+      measurement.style.height = "auto";
+      measurement.style.minHeight = "0";
+      measurement.style.maxWidth = "none";
+      measurement.style.overflow = "visible";
+      measurement.style.whiteSpace = "pre";
+      measurement.style.visibility = "hidden";
+      measurement.style.pointerEvents = "none";
+      document.body.appendChild(measurement);
+      const measuredWidth = measurement.getBoundingClientRect().width;
+      measurement.remove();
+      naturalWidth = Math.max(BUBBLE_MIN_WIDTH, Math.ceil((measuredWidth + BUBBLE_OUTER_CHROME_PX + BUBBLE_NATURAL_WIDTH_BUFFER_PX) * BUBBLE_EDITOR_SCALE));
+      onNaturalWidthChange(naturalWidth);
+    }
+    const maxAvailableBubbleWidth = Math.max(1, CANVAS_WIDTH - elementX);
+    const firstInputWidth = naturalWidth !== null && bubbleContentChanged && bubbleWidthMode === "auto" && editableElementContent.trim()
+      ? clamp(naturalWidth, Math.min(BUBBLE_MIN_WIDTH, maxAvailableBubbleWidth), maxAvailableBubbleWidth)
+      : null;
+
+    if (!canEditGeometry || (!shouldMeasureText && !shouldMeasureBubble)) {
+      lastMeasuredWidthRef.current = isTextElement ? element.width : null;
       return;
     }
-    if (element.type !== "text" || !canEditGeometry) return;
-    if (autoHeightResizeActive && !isEditingBodyText && lastMeasuredWidthRef.current === element.width) return;
-    const canvas = elementRef.current?.closest<HTMLElement>(".ab-canvas");
-    const content = elementRef.current?.querySelector<HTMLElement>(".ab-canvas-text-content");
+    if (isTextElement && autoHeightResizeActive && !isEditingBodyText && lastMeasuredWidthRef.current === element.width) return;
     const canvasHeight = canvas?.getBoundingClientRect().height ?? 0;
-    if (!content || canvasHeight <= 0) return;
+    if (canvasHeight <= 0) return;
 
-    const previousHeight = content.style.height;
-    content.style.height = "auto";
-    const contentHeight = content.scrollHeight;
-    content.style.height = previousHeight;
+    let contentHeight: number;
+    if (isBubbleElement) {
+      const measurement = content.cloneNode(false) as HTMLElement;
+      measurement.innerHTML = content.innerHTML;
+      measurement.style.position = "fixed";
+      measurement.style.left = "-100000px";
+      measurement.style.top = "0";
+      const contentRect = content.getBoundingClientRect();
+      const elementRect = elementRef.current?.getBoundingClientRect();
+      const outerChrome = (elementRect?.width ?? contentRect.width) - contentRect.width;
+      const targetContentWidth = firstInputWidth !== null
+        ? firstInputWidth / BUBBLE_EDITOR_SCALE - outerChrome
+        : contentRect.width;
+      measurement.style.width = `${Math.max(1, targetContentWidth)}px`;
+      measurement.style.height = "auto";
+      measurement.style.minHeight = "0";
+      measurement.style.maxHeight = "none";
+      measurement.style.overflow = "visible";
+      measurement.style.visibility = "hidden";
+      measurement.style.pointerEvents = "none";
+      document.body.appendChild(measurement);
+      contentHeight = measurement.getBoundingClientRect().height;
+      measurement.remove();
+    } else {
+      const previousHeight = content.style.height;
+      content.style.height = "auto";
+      contentHeight = content.scrollHeight;
+      content.style.height = previousHeight;
+    }
     if (autoHeightResizeActive) lastMeasuredWidthRef.current = element.width;
 
-    const nextHeight = Math.max(54, Math.ceil(contentHeight * (CANVAS_HEIGHT / canvasHeight)));
-    if (Number.isFinite(nextHeight) && Math.abs(nextHeight - element.height) > 1) {
-      onAutoHeightChange(nextHeight);
+    const nextHeight = isBubbleElement
+      ? Math.max(BUBBLE_MIN_HEIGHT, Math.ceil((contentHeight + BUBBLE_OUTER_CHROME_PX) * BUBBLE_EDITOR_SCALE))
+      : Math.max(54, Math.ceil(contentHeight * (CANVAS_HEIGHT / canvasHeight)));
+    const sizePatch: ElementGeometryPatch = {};
+    if (isBubbleElement && bubbleContentChanged && bubbleWidthMode === "auto" && editableElementContent.trim() && naturalWidth !== null) {
+      sizePatch.width = firstInputWidth ?? BUBBLE_MIN_WIDTH;
+      sizePatch.widthMode = "manual";
     }
+    if (Number.isFinite(nextHeight) && Math.abs(nextHeight - element.height) > 1) sizePatch.height = nextHeight;
+    if (Object.keys(sizePatch).length > 0) onAutoSizeChange(sizePatch);
   }, [
     autoHeightResizeActive,
     canEditText,
@@ -2470,11 +2729,19 @@ function CanvasElement({
     element.height,
     element.type,
     element.width,
+    bubbleWidthMode,
+    elementX,
     isBodyText,
-    onAutoHeightChange,
+    onAutoSizeChange,
+    onNaturalWidthChange,
   ]);
 
-  const positionStyle = {
+  const positionStyle = positionedByParent ? {
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    zIndex: 1,
+  } : {
     left: `${(element.x / CANVAS_WIDTH) * 100}%`,
     top: `${(element.y / CANVAS_HEIGHT) * 100}%`,
     width: `${(element.width / CANVAS_WIDTH) * 100}%`,
@@ -2574,7 +2841,9 @@ function CanvasElement({
     role: "button" as const,
     "aria-label": `${getElementLabel(element.type)}：${elementName(element)}`,
   };
-  const resizeCorners: ResizeCorner[] = element.type === "text"
+  const resizeCorners: ResizeCorner[] = element.type === "bubble"
+    ? ["middle-left", "middle-right"]
+    : element.type === "text"
     ? ["top-left", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-right"]
     : ["top-left", "top-right", "bottom-left", "bottom-right"];
 
@@ -2631,6 +2900,7 @@ function CanvasElement({
         </>
       )}
       {element.type === "question" && <QuestionCanvas element={element} />}
+      {element.type === "interaction" && <InteractionCanvas element={element} />}
       {element.type === "bubble" && (
         <>
           <div
@@ -2640,17 +2910,52 @@ function CanvasElement({
           >
             {!editing && element.content}
           </div>
-          <span
-            className={`ab-bubble-tail ab-bubble-tail--${element.direction}`}
-            style={{ left: `${element.tailX}%`, top: `${element.tailY}%` }}
-            onPointerDown={(event) => onPointerDown(event, "tail")}
-            role="slider"
-            aria-label="调整气泡指向"
-            tabIndex={selected ? 0 : -1}
-          />
+          {(() => {
+            const tailAngle = normalizeAngle(element.tailAngle);
+            const tailPosition = getBubbleTailPosition(element.width, element.height, tailAngle);
+            return (
+              <span
+                className="ab-bubble-tail"
+                style={{
+                  left: `${tailPosition.left}%`,
+                  top: `${tailPosition.top}%`,
+                  transform: `translate(-50%, -50%) rotate(${tailAngle - 90}deg)`,
+                }}
+                onPointerDown={(event) => onPointerDown(event, "tail")}
+                onKeyDown={(event) => {
+                  const step = event.shiftKey ? 15 : 1;
+                  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onTailAngleChange(normalizeAngle(tailAngle + step));
+                  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onTailAngleChange(normalizeAngle(tailAngle - step));
+                  } else if (event.key === "Home") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onTailAngleChange(0);
+                  } else if (event.key === "End") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onTailAngleChange(359);
+                  }
+                }}
+                role="slider"
+                aria-label="调整气泡指向"
+                aria-valuemin={0}
+                aria-valuemax={359}
+                aria-valuestep={1}
+                aria-valuenow={Math.round(tailAngle) % 360}
+                aria-valuetext={`${Math.round(tailAngle)}°，顺时针方向`}
+                tabIndex={selected ? 0 : -1}
+              />
+            );
+          })()}
         </>
       )}
-      {selected && element.type !== "question" && (
+      {selected && element.type !== "question" && element.type !== "interaction" && (
         <>
           {canEditGeometry && resizeCorners.map((corner) => (
             <span
@@ -2662,6 +2967,25 @@ function CanvasElement({
           ))}
         </>
       )}
+    </div>
+  );
+}
+
+function InteractionCanvas({ element }: { element: InteractionElement }) {
+  const characters = Array.from(element.title.trim());
+  return (
+    <div className="ab-interaction-canvas" aria-label="投票互动画布预览">
+      <div className="ab-interaction-title">
+        <div className="ab-interaction-title-line">
+          <img src={new URL("./assets/f3183aca-3189-409f-b5b6-7e67b1ee3c9a.svg", import.meta.url).href} width={13.333} height={13.333} alt="标题语音" />
+          <span className={characters.length ? undefined : "is-empty"}>{characters.slice(0, 10).join("") || "暂无内容"}</span>
+          <img className="ab-interaction-arrow" src={new URL("./assets/fe80ed05-da26-4780-8c21-dc54e8f35635.svg", import.meta.url).href} width={10.667} height={10.667} alt="" />
+        </div>
+        {characters.length > 10 && <div>{characters.slice(10).join("")}</div>}
+      </div>
+      <div className="ab-interaction-options">
+        {element.options.map((option) => <div className={`ab-interaction-option${option.content.trim() ? "" : " is-empty"}`} key={option.id}>{option.content.trim() || "暂无内容"}</div>)}
+      </div>
     </div>
   );
 }
@@ -2844,6 +3168,12 @@ function CanvasRequirement({
           className="ab-rich-text-editor--canvas"
           placeholder={elementType === "image" ? "输入图片需求..." : "输入动效需求..."}
           autoFocus
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onFinishEditing();
+          }}
         />
       ) : mode === "preview" ? (
         <div
@@ -2969,70 +3299,39 @@ function CoverTextSlot({
   onEndEdit: () => void;
 }) {
   const field = element.coverField;
-  const contentRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const value = element.content;
-
-  useLayoutEffect(() => {
-    if (!contentRef.current || (editing && research)) return;
-    if (contentRef.current.textContent !== value) contentRef.current.textContent = value;
-  }, [editing, research, value]);
-
-  useLayoutEffect(() => {
-    if (!editing || !research || !contentRef.current) return;
-    if (contentRef.current.textContent !== value) contentRef.current.textContent = value;
-    contentRef.current.focus();
-    const selection = window.getSelection();
-    if (!selection) return;
-    const range = document.createRange();
-    range.selectNodeContents(contentRef.current);
-    range.collapse(false);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  // Content is intentionally excluded: this initializes the uncontrolled editor only on edit entry.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, research]);
 
   if (!field) return null;
   const geometry = COVER_TEXT_GEOMETRY[field];
   const isTitle = field === "title";
 
-  const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
-    const nativeEvent = event.nativeEvent as InputEvent;
-    if (isComposingRef.current || nativeEvent.isComposing) return;
-    const rawContent = (event.currentTarget.textContent ?? "").replace(/\u00a0/g, " ");
-    const nextContent = rawContent.trim() ? rawContent : "";
-    if (!nextContent) event.currentTarget.replaceChildren();
-    onChange(nextContent);
-  };
-
   const content = (
-    <div
+    <input
       ref={contentRef}
       className="ab-cover-text-value"
-      contentEditable={editing && research}
-      suppressContentEditableWarning
-      data-placeholder={COVER_TEXT_FIELD_PLACEHOLDERS[field]}
+      type="text"
+      value={value}
+      readOnly={!research}
+      aria-label={`封面${COVER_TEXT_FIELD_LABELS[field]}`}
+      placeholder={COVER_TEXT_FIELD_PLACEHOLDERS[field]}
+      onFocus={() => { if (research) onBeginEdit(); else onSelect(); }}
       onCompositionStart={() => { isComposingRef.current = true; }}
-      onCompositionEnd={(event: React.CompositionEvent<HTMLDivElement>) => {
+      onCompositionEnd={() => {
         isComposingRef.current = false;
-        const rawContent = (event.currentTarget.textContent ?? "").replace(/\u00a0/g, " ");
-        const nextContent = rawContent.trim() ? rawContent : "";
-        if (!nextContent) event.currentTarget.replaceChildren();
-        onChange(nextContent);
       }}
-      onInput={handleInput}
+      onChange={(event) => { if (research) onChange(event.target.value); }}
       onBlur={onEndEdit}
-      onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
+      onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
         event.stopPropagation();
+        if (isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
         if (event.key === "Escape" || event.key === "Enter") {
           event.preventDefault();
-          onEndEdit();
+          event.currentTarget.blur();
         }
       }}
-    >
-      {!editing && value}
-    </div>
+    />
   );
 
   return (
@@ -3045,13 +3344,11 @@ function CoverTextSlot({
         height: `${(geometry.height / CANVAS_HEIGHT) * 100}%`,
         zIndex: 4,
       }}
-      role="button"
-      tabIndex={0}
-      aria-label={`封面${COVER_TEXT_FIELD_LABELS[field]}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.stopPropagation();
         onSelect();
+        contentRef.current?.focus();
       }}
       onDoubleClick={(event) => {
         event.stopPropagation();
@@ -3076,6 +3373,7 @@ function CoverTextSlot({
 }
 
 function CoverMediaElement({
+  children,
   element,
   layout,
   selected,
@@ -3087,6 +3385,7 @@ function CoverMediaElement({
   onChangeMedia,
 }: {
   element: ImageElement | MotionElement;
+  children: React.ReactNode;
   layout: CoverLayout;
   selected: boolean;
   research: boolean;
@@ -3160,6 +3459,7 @@ function CoverMediaElement({
         else onSelect();
       }}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           if (!research) onRequestUpload();
@@ -3168,6 +3468,7 @@ function CoverMediaElement({
       }}
     >
       <div className="ab-cover-media-surface">{media}</div>
+      <div className="ab-canvas-requirement-layer">{children}</div>
       <div className={`ab-cover-media-tag ab-cover-media-tag--${mediaType}`}>
         {layout === "fullscreen" ? (
           <button
@@ -3257,7 +3558,12 @@ function CoverAudioPanel({
           </div>
           <div className="ab-cover-audio-media">
             <span className="ab-cover-audio-tag">语音</span>
-            <label
+            {research && !requirement?.asset && (
+              <div className="ab-cover-audio-placeholder">
+                <img src={new URL("./assets/cover-audio-placeholder.svg", import.meta.url).href} width={65} height={65} alt="暂无讲解语音" />
+              </div>
+            )}
+            {!research && <label
               className={`ab-cover-audio-upload${research ? " is-readonly" : ""}`}
               onDragOver={(event) => { if (!research) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
               onDrop={(event) => {
@@ -3270,21 +3576,21 @@ function CoverAudioPanel({
               <Upload size={24} aria-hidden="true" />
               <span>{requirement?.asset ? `已有音频：${requirement.asset.fileName}，点击或拖拽替换` : "点击或拖拽音频进行上传"}</span>
               <input className="ab-hidden-input" type="file" accept="audio/*" disabled={research} onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.currentTarget.value = ""; }} />
-            </label>
+            </label>}
             {requirement?.asset && <audio className="ab-cover-audio-player" controls src={requirement.asset.url} aria-label="播放封面语音" />}
             <div className="ab-cover-audio-demand">
               <button type="button" className="ab-cover-audio-demand-toggle" aria-expanded={requirementOpen} onClick={() => setRequirementOpen((value) => !value)}>
-                <span>需求</span>{requirementOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+                <span>需求</span>{requirementOpen ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronUp size={14} aria-hidden="true" />}
               </button>
               {requirementOpen && (
                 <div className="ab-cover-audio-demand-rows">
                   <div className="ab-cover-audio-demand-row">
                     <span className="ab-cover-audio-demand-label">需求</span>
-                    {research ? <RequirementRichText value={brief} onChange={onChange} className="ab-cover-audio-rich-text" placeholder="输入封面语音需求..." /> : <RichTextPreview value={brief} />}
+                    <textarea className="ab-cover-audio-text-input" aria-label="封面语音需求" value={brief.text} readOnly={!research} placeholder="输入封面语音需求..." onChange={(event) => { const text = event.target.value; const node = document.createElement("div"); node.textContent = text; onChange({ text, html: node.innerHTML.replace(/\n/g, "<br>") }); }} />
                   </div>
                   <div className="ab-cover-audio-demand-row">
                     <span className="ab-cover-audio-demand-label">补充</span>
-                    {research ? <RequirementRichText value={supplement} onChange={onSupplement} className="ab-cover-audio-rich-text" placeholder="输入补充需求..." /> : <RichTextPreview value={supplement} />}
+                    <textarea className="ab-cover-audio-text-input" aria-label="封面语音补充需求" value={supplement.text} readOnly={!research} placeholder="输入补充需求..." onChange={(event) => { const text = event.target.value; const node = document.createElement("div"); node.textContent = text; onSupplement({ text, html: node.innerHTML.replace(/\n/g, "<br>") }); }} />
                   </div>
                 </div>
               )}
@@ -3297,163 +3603,6 @@ function CoverAudioPanel({
   );
 }
 
-function PropertiesPanel({
-  page,
-  selectedId,
-  onSelectElement,
-  onUpdateElement,
-  onRemoveElement,
-  onRequestAudioUpload,
-}: {
-  page: AnimationBookPage;
-  selectedId: string | null;
-  onSelectElement: (id: string) => void;
-  onUpdateElement: (id: string, patch: Partial<BookElement>) => void;
-  onRemoveElement: (id: string) => void;
-  onRequestAudioUpload: () => void;
-}) {
-  const contentElements = [...page.elements].sort((a, b) => b.zIndex - a.zIndex);
-
-  return (
-    <div className="ab-panel-content">
-      <div className="ab-panel-heading">
-        <div>
-          <span className="ab-panel-eyebrow">当前页面全部内容</span>
-          <h2>{page.kind === "cover" ? "封面内容" : "页面内容"}</h2>
-        </div>
-        <span className="ab-panel-note">{contentElements.length} 个元素</span>
-      </div>
-
-      <section className="ab-content-section">
-        <div className="ab-content-section-heading">
-          <div><strong>画布元素</strong><span>内容在画布中直接编辑，点击卡片可定位元素</span></div>
-          <span className="ab-order-count">{contentElements.length}</span>
-        </div>
-        <div className="ab-content-list">
-          {contentElements.length === 0 && <div className="ab-order-empty">当前页面暂无元素</div>}
-          {contentElements.map((element) => (
-            <ContentItem
-              key={element.id}
-              element={element}
-              isBodyText={page.kind === "page"}
-              selected={selectedId === element.id}
-              onSelect={() => onSelectElement(element.id)}
-              onUpdate={(patch) => onUpdateElement(element.id, patch)}
-              onRemove={() => onRemoveElement(element.id)}
-              onRequestAudioUpload={onRequestAudioUpload}
-            />
-          ))}
-        </div>
-      </section>
-
-      <div className="ab-panel-extension-note"><CircleHelp size={14} /><span>动效产物在需求 / 产物面板中由制作人员上传；互动答题和审校区将在后续版本接入。</span></div>
-    </div>
-  );
-}
-
-function ContentItem({
-  element,
-  isBodyText,
-  selected,
-  onSelect,
-  onUpdate,
-  onRemove,
-  onRequestAudioUpload,
-}: {
-  element: BookElement;
-  isBodyText: boolean;
-  selected: boolean;
-  onSelect: () => void;
-  onUpdate: (patch: Partial<BookElement>) => void;
-  onRemove: () => void;
-  onRequestAudioUpload: () => void;
-}) {
-  const icon = element.type === "text" ? <Type size={14} /> : element.type === "image" ? <FileImage size={14} /> : element.type === "motion" ? <Film size={14} /> : element.type === "question" ? <Gamepad2 size={14} /> : <MessageCircle size={14} />;
-  const label = element.type === "text" ? "文本" : element.type === "image" ? "图片" : element.type === "motion" ? "动效" : element.type === "question" ? "题" : "气泡";
-  const textSize = isBodyText ? "16px" : element.type === "text" ? element.fontSize + "px" : null;
-
-  return (
-    <article
-      className={`ab-content-card${selected ? " is-selected" : ""}`}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        const target = event.target as HTMLElement;
-        if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName)) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-      role="button"
-      tabIndex={0}
-    >
-      <div className={`ab-content-card-icon ab-layer-icon--${element.type}`}>{icon}</div>
-      <div className="ab-content-card-main">
-        <div className="ab-content-card-header">
-          <div><strong>{label}</strong><span>{elementName(element)}</span></div>
-          <button type="button" className="ab-icon-button ab-icon-button--danger" onClick={(event) => { event.stopPropagation(); onRemove(); }} aria-label={`删除${label}`} title={`删除${label}`}><Trash2 size={14} /></button>
-        </div>
-
-        {element.type === "text" && (
-          <>
-            <p className="ab-content-card-copy">{element.content || "未填写文本"}</p>
-            <div className="ab-content-card-meta">画布内编辑 · {textSize} · {element.fontWeight === "bold" ? "加粗" : element.fontWeight === "medium" ? "中等" : "常规"}{isBodyText ? " · 24px" : ""}</div>
-            <AudioField hasAudio={Boolean(element.audioUrl)} onRequest={onRequestAudioUpload} label="文本语音" />
-          </>
-        )}
-
-        {element.type === "image" && (
-          <>
-            <div className="ab-content-card-image">
-              {element.src ? <img src={element.src} alt="" /> : <div className="ab-content-card-image-empty"><FileImage size={16} /><span>等待制作人员上传</span></div>}
-              <div><strong>{element.alt}</strong><span>图片元素 · 画布内拖拽调整大小</span></div>
-            </div>
-            <label className="ab-field ab-content-card-field"><span>填充方式</span><select value={element.objectFit} onClick={(event) => event.stopPropagation()} onChange={(event) => onUpdate({ objectFit: event.target.value as ImageElement["objectFit"] })}><option value="contain">完整显示</option><option value="cover">裁切填充</option></select></label>
-          </>
-        )}
-
-        {element.type === "motion" && (
-          <div className="ab-content-card-image">
-            <div className="ab-content-card-motion"><Film size={17} /><span>{element.src ? "已上传静态占位" : "等待制作人员上传"}</span></div>
-            <div><strong>{element.fileName}</strong><span>动效元素 · 不播放，仅调整位置和尺寸</span></div>
-          </div>
-        )}
-
-        {element.type === "bubble" && (
-          <>
-            <textarea value={element.content} onClick={(event) => event.stopPropagation()} onChange={(event) => onUpdate({ content: event.target.value })} rows={2} aria-label="气泡文字" />
-            <div className="ab-form-grid ab-form-grid--three ab-content-card-controls">
-              <label className="ab-field"><span>气泡方向</span><select value={element.direction} onClick={(event) => event.stopPropagation()} onChange={(event) => onUpdate({ direction: event.target.value as BubbleElement["direction"] })}><option value="left">左侧指向</option><option value="right">右侧指向</option></select></label>
-              <NumberField label="三角横向 %" value={element.tailX} onChange={(value) => onUpdate({ tailX: clamp(value, 0, 100) })} />
-              <NumberField label="三角纵向 %" value={element.tailY} onChange={(value) => onUpdate({ tailY: clamp(value, 0, 100) })} />
-            </div>
-            <AudioField hasAudio={Boolean(element.audioUrl)} onRequest={onRequestAudioUpload} label="气泡语音" />
-          </>
-        )}
-
-        {element.type === "question" && (
-          <>
-            <p className="ab-content-card-copy">{element.stem || "未填写题干"}</p>
-            <div className="ab-content-card-meta">固定位置 · {element.options.length} 个选项 · 多选题</div>
-          </>
-        )}
-      </div>
-    </article>
-  );
-}
-
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return <label className="ab-field"><span>{label}</span><input type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} /></label>;
-}
-
-function AudioField({ hasAudio, onRequest, label }: { hasAudio: boolean; onRequest: () => void; label: string }) {
-  return (
-    <div className="ab-audio-field">
-      <div className="ab-setting-label-row"><label><FileAudio size={13} />{label}</label><span>{hasAudio ? "已绑定 1 条" : "未上传"}</span></div>
-      <button type="button" className={`ab-upload-button ab-upload-button--readonly${hasAudio ? " is-ready" : ""}`} onClick={onRequest}><Upload size={14} />制作人员上传</button>
-    </div>
-  );
-}
 
 function LayersPanel({
   elements,
@@ -3462,6 +3611,7 @@ function LayersPanel({
   onMove,
   onReorder,
   onToggleVisibility,
+  onOpenRequirement,
 }: {
   elements: BookElement[];
   selectedId: string | null;
@@ -3469,6 +3619,7 @@ function LayersPanel({
   onMove: (id: string, direction: "up" | "down" | "top" | "bottom") => void;
   onReorder: (id: string, targetId: string, position: LayerDropPosition) => void;
   onToggleVisibility: (id: string) => void;
+  onOpenRequirement: (element: BookElement) => void;
 }) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; position: LayerDropPosition } | null>(null);
@@ -3578,6 +3729,20 @@ function LayersPanel({
                 {getLayerTypeIcon(element.type)}
               </span>
               <span className="ab-canvas-layer-name" title={elementName(element)}>{elementName(element)}</span>
+              {(element.type === "image" || element.type === "motion") && (
+                <button
+                  type="button"
+                  className="ab-canvas-layer-requirement"
+                  aria-label={`打开${element.type === "image" ? "图片" : "动效"}需求`}
+                  title="打开需求"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenRequirement(element);
+                  }}
+                >
+                  <ClipboardList size={13} aria-hidden="true" />
+                </button>
+              )}
               <button
                 type="button"
                 className="ab-canvas-layer-visibility"

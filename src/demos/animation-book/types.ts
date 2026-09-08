@@ -2,10 +2,10 @@ export type BookLanguage = "zh" | "en";
 export type CoverLayout = "split" | "fullscreen";
 export type CoverTextField = "title" | "topic" | "wordCount" | "fiction";
 export type UserRole = "research" | "production";
-export type ElementType = "text" | "image" | "motion" | "bubble" | "question";
+export type ElementType = "text" | "image" | "motion" | "bubble" | "question" | "interaction";
 export type RequirementType = "image" | "motion" | "audio";
 export type RequirementStatus = "pending" | "uploaded" | "failed";
-export type BubbleDirection = "left" | "right";
+export type BubbleWidthMode = "auto" | "manual";
 export type TextAlign = "left" | "center" | "right" | "justify";
 export type TextAnnotationType = "word" | "sentence" | "note";
 export type PronunciationMode = "pinyin" | "phonetic";
@@ -72,9 +72,10 @@ export interface MotionElement extends ElementBase {
 export interface BubbleElement extends ElementBase {
   type: "bubble";
   content: string;
-  direction: BubbleDirection;
-  tailX: number;
-  tailY: number;
+  /** The first non-empty input is auto-sized; subsequent width changes are manual. */
+  widthMode: BubbleWidthMode;
+  /** 0° points right and increases clockwise in the canvas coordinate system. */
+  tailAngle: number;
   audioUrl: string | null;
   voiceSupplement: string;
 }
@@ -92,7 +93,27 @@ export interface QuestionElement extends ElementBase {
   options: QuestionOption[];
 }
 
-export type BookElement = TextElement | ImageElement | MotionElement | BubbleElement | QuestionElement;
+export interface InteractionOption {
+  id: string;
+  content: string;
+  proportion: "large" | "small";
+}
+
+export interface InteractionElement extends ElementBase {
+  type: "interaction";
+  title: string;
+  options: [InteractionOption, InteractionOption];
+  audioUrl: string | null;
+  voiceSupplement: string;
+}
+
+export type InteractionDraft = Pick<InteractionElement, "title" | "options" | "voiceSupplement">;
+
+export type BookElement = TextElement | ImageElement | MotionElement | BubbleElement | QuestionElement | InteractionElement;
+
+/** Only these element types participate in playback ordering. */
+export const participatesInPlayback = (element: BookElement): boolean =>
+  element.type === "text" || element.type === "motion" || element.type === "bubble";
 
 export interface RichTextDocument {
   html: string;

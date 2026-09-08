@@ -1,444 +1,106 @@
-import type {
-  AnimationBook,
-  AnimationBookPage,
-  BubbleElement,
-  ImageElement,
-  MotionElement,
-  ProductionAsset,
-  ProductionRequirement,
-  PlaybackOrderItem,
-  RequirementTarget,
-  RequirementType,
-  TextElement,
-} from "./types";
+import { participatesInPlayback } from "./types";
+import type { AnimationBook, AnimationBookPage, BookElement, CoverTextField, TextElement } from "./types";
 
-const asset = (name: string) => `/animation-book/assets/${name}`;
+export const BUBBLE_DEFAULT_GEOMETRY = {
+  width: 298,
+  height: 120,
+  tailAngle: 90,
+  widthMode: "auto",
+} as const;
 
-const coverImage: ImageElement = {
-  id: "cover-image",
-  type: "image",
-  x: 286,
-  y: 201,
-  width: 678,
-  height: 678,
-  zIndex: 1,
-  src: asset("scene-1.jpeg"),
-  alt: "绘本封面插图",
-  objectFit: "cover",
+type LegacyBubbleFields = {
+  widthMode?: unknown;
+  tailAngle?: unknown;
+  direction?: unknown;
+  tailX?: unknown;
+  tailY?: unknown;
 };
 
-const coverTitle: TextElement = {
-  id: "cover-title",
-  type: "text",
-  x: 994,
-  y: 330,
-  width: 640,
-  height: 90,
-  zIndex: 2,
-  content: "北风和太阳",
-  fontSize: 60,
-  color: "#404040",
-  fontWeight: "bold",
-  coverField: "title",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
+const normalizeAngle = (angle: number) => ((angle % 360) + 360) % 360;
+
+const migrateBubbleElement = (element: BookElement): BookElement => {
+  if (element.type !== "bubble") return element;
+
+  const legacy = element as BookElement & LegacyBubbleFields;
+  const widthMode = legacy.widthMode === "manual" ? "manual" : "auto";
+  if (typeof legacy.tailAngle === "number" && Number.isFinite(legacy.tailAngle)) {
+    return { ...element, widthMode, tailAngle: normalizeAngle(legacy.tailAngle) };
+  }
+
+  const hasLegacyPosition = typeof legacy.tailX === "number" || typeof legacy.tailY === "number" || legacy.direction === "left" || legacy.direction === "right";
+  if (!hasLegacyPosition) return { ...element, widthMode, tailAngle: BUBBLE_DEFAULT_GEOMETRY.tailAngle };
+  const x = typeof legacy.tailX === "number" ? Math.min(Math.max(legacy.tailX, 0), 100) : legacy.direction === "left" ? 0 : legacy.direction === "right" ? 100 : 50;
+  const y = typeof legacy.tailY === "number" ? Math.min(Math.max(legacy.tailY, 0), 100) : 50;
+  const angle = Math.atan2(y - 50, x - 50) * (180 / Math.PI);
+  return { ...element, widthMode, tailAngle: normalizeAngle(angle) };
 };
 
-const coverTopic: TextElement = {
-  id: "cover-topic",
-  type: "text",
-  x: 994,
-  y: 528,
-  width: 640,
-  height: 72,
-  zIndex: 3,
-  content: "寓言故事",
-  fontSize: 40,
-  color: "#353e42",
-  fontWeight: "regular",
-  coverField: "topic",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const coverWordCount: TextElement = {
-  id: "cover-word-count",
-  type: "text",
-  x: 994,
-  y: 600,
-  width: 640,
-  height: 72,
-  zIndex: 3,
-  content: "约 500 字",
-  fontSize: 40,
-  color: "#353e42",
-  fontWeight: "regular",
-  coverField: "wordCount",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const coverFiction: TextElement = {
-  id: "cover-fiction",
-  type: "text",
-  x: 994,
-  y: 672,
-  width: 640,
-  height: 72,
-  zIndex: 3,
-  content: "虚构",
-  fontSize: 40,
-  color: "#353e42",
-  fontWeight: "regular",
-  coverField: "fiction",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const coverMotion: MotionElement = {
-  id: "cover-motion",
-  type: "motion",
-  x: 0,
-  y: 0,
-  width: 1920,
-  height: 1080,
-  zIndex: 1,
-  src: null,
-  fileName: "待上传动效",
-  objectFit: "cover",
-  hidden: true,
-};
-
-const firstText: TextElement = {
-  id: "page-1-text",
-  type: "text",
-  x: 104,
-  y: 108,
-  width: 810,
-  height: 430,
-  zIndex: 2,
-  content:
-    "一阵暴雨从天而降，将采石场里的一堆石头冲刷得一尘不染。暴雨过后，太阳从厚厚的云层中探出头来。",
-  fontSize: 48,
-  color: "#404040",
-  fontWeight: "regular",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const firstImage: ImageElement = {
-  id: "page-1-image",
-  type: "image",
-  x: 1000,
-  y: 196,
-  width: 774,
-  height: 582,
-  zIndex: 1,
-  src: asset("scene-3.png"),
-  alt: "石头和阳光下的场景",
-  objectFit: "contain",
-};
-
-const firstDecoration: ImageElement = {
-  id: "page-1-decoration",
-  type: "image",
-  x: 1074,
-  y: 692,
-  width: 622,
-  height: 332,
-  zIndex: 3,
-  src: asset("scene-7.png"),
-  alt: "太阳和北风插画",
-  objectFit: "contain",
-};
-
-const firstMotion: MotionElement = {
-  id: "page-1-motion",
-  type: "motion",
-  x: 1410,
-  y: 746,
-  width: 370,
-  height: 220,
-  zIndex: 4,
-  src: null,
-  fileName: "待上传动效",
-  objectFit: "contain",
-};
-
-const secondText: TextElement = {
-  id: "page-2-text",
-  type: "text",
-  x: 924,
-  y: 112,
-  width: 840,
-  height: 350,
-  zIndex: 2,
-  content: "我把钻石献给尊贵的国王，他一定会非常喜欢！",
-  fontSize: 48,
-  color: "#404040",
-  fontWeight: "regular",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const secondImage: ImageElement = {
-  id: "page-2-image",
-  type: "image",
-  x: 132,
-  y: 160,
-  width: 700,
-  height: 724,
-  zIndex: 1,
-  src: asset("scene-9.png"),
-  alt: "故事角色插图",
-  objectFit: "contain",
-};
-
-const secondBubble: BubbleElement = {
-  id: "page-2-bubble",
-  type: "bubble",
-  x: 1000,
-  y: 540,
-  width: 650,
-  height: 250,
-  zIndex: 3,
-  content: "好的先生，请把我也带给国王吧，他一定会喜欢我。",
-  direction: "left",
-  tailX: 8,
-  tailY: 70,
-  audioUrl: null,
-  voiceSupplement: "",
-};
-
-const thirdTitle: TextElement = {
-  id: "page-3-title",
-  type: "text",
-  x: 660,
-  y: 94,
-  width: 620,
-  height: 90,
-  zIndex: 3,
-  content: "有用的石头",
-  fontSize: 48,
-  color: "#353e42",
-  fontWeight: "regular",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const thirdText: TextElement = {
-  id: "page-3-text",
-  type: "text",
-  x: 184,
-  y: 250,
-  width: 800,
-  height: 390,
-  zIndex: 2,
-  content:
-    "几天后，有人来石场拉石头，原来是村里的人要盖房子啦。鹅卵石心想：虽然不能见国王，但我还可以盖房子呀。",
-  fontSize: 48,
-  color: "#404040",
-  fontWeight: "regular",
-  audioUrl: null,
-  voiceSupplement: "",
-  annotations: [],
-};
-
-const thirdImage: ImageElement = {
-  id: "page-3-image",
-  type: "image",
-  x: 1070,
-  y: 360,
-  width: 680,
-  height: 510,
-  zIndex: 1,
-  src: asset("scene-7.png"),
-  alt: "石头插画",
-  objectFit: "contain",
-};
-
-const richText = (html: string) => ({
-  html,
-  text: html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim(),
-});
-
-const uploadedAsset = (url: string, fileName: string, mimeType: string): ProductionAsset => ({
-  url,
-  fileName,
-  mimeType,
-  uploadedAt: "2026-08-24T09:00:00.000Z",
-});
-
-const requirement = (
-  id: string,
-  type: RequirementType,
-  title: string,
-  html: string,
-  target: RequirementTarget | null,
-  asset: ProductionAsset | null = null,
-): ProductionRequirement => ({
-  id,
-  type,
-  title,
-  brief: richText(html),
-  target,
-  asset,
-  status: asset ? "uploaded" : "pending",
-});
-
-const createPage = (
-  id: string,
-  label: string,
-  elements: AnimationBookPage["elements"],
-  backgroundColor = "#fefcf8",
-  requirements: ProductionRequirement[] = [],
-): AnimationBookPage => {
-  const visualRequirements = elements
-    .filter((element): element is ImageElement | MotionElement => element.type === "image" || element.type === "motion")
-    .filter((element) => !requirements.some(
-      (candidate) => candidate.type === element.type && candidate.target?.kind === "element" && candidate.target.elementId === element.id,
-    ))
-    .map((element) => requirement(
-      `${element.id}-brief`,
-      element.type,
-      element.type === "image" ? "图片制作需求" : "动效制作需求",
-      "",
-      { kind: "element", elementId: element.id },
-    ));
-  const nextRequirements = [...requirements, ...visualRequirements];
-  const playbackOrder: PlaybackOrderItem[] = elements
-    .filter((element) => element.type !== "question")
-    .map((element) => ({
-    elementId: element.id,
-    displayMode: "always",
-    }));
+export const normalizeAnimationBook = (book: AnimationBook): AnimationBook => {
+  const normalizePage = (page: AnimationBookPage): AnimationBookPage => ({
+    ...page,
+    elements: page.elements.map(migrateBubbleElement),
+    playbackOrder: page.playbackOrder.filter((item) => page.elements.some((element) => element.id === (typeof item === "string" ? item : item.elementId) && participatesInPlayback(element))),
+  });
 
   return {
-    id,
-    label,
-    kind: "page",
-    backgroundColor,
-    elements,
-    appearanceOrder: elements.map((element) => element.id),
-    playbackOrder,
-    requirements: nextRequirements,
+    ...book,
+    cover: normalizePage(book.cover),
+    pages: book.pages.map(normalizePage),
   };
 };
+
+const createEmptyPage = (
+  id: string,
+  label: string,
+  kind: AnimationBookPage["kind"],
+): AnimationBookPage => ({
+  id,
+  label,
+  kind,
+  backgroundColor: "#fefcf8",
+  elements: [],
+  appearanceOrder: [],
+  playbackOrder: [],
+  requirements: [],
+});
+
+const coverTextSlots: { field: CoverTextField; id: string; y: number }[] = [
+  { field: "title", id: "cover-title", y: 330 },
+  { field: "topic", id: "cover-topic", y: 528 },
+  { field: "wordCount", id: "cover-word-count", y: 600 },
+  { field: "fiction", id: "cover-fiction", y: 672 },
+];
+
+// Empty content retains the fixed cover template and its production bindings.
+const createEmptyCover = (): AnimationBookPage => ({
+  ...createEmptyPage("cover", "封面", "cover"),
+  elements: [
+    { id: "cover-image", type: "image", x: 286, y: 201, width: 678, height: 678, zIndex: 1, src: "", alt: "封面图片", objectFit: "cover" },
+    { id: "cover-motion", type: "motion", x: 0, y: 0, width: 1920, height: 1080, zIndex: 1, src: null, fileName: "", objectFit: "cover", hidden: true },
+    ...coverTextSlots.map(({ field, id, y }): TextElement => ({
+      id, type: "text", coverField: field, x: 994, y, width: 640,
+      height: field === "title" ? 90 : 72, zIndex: field === "title" ? 2 : 3,
+      content: "", fontSize: field === "title" ? 60 : 40,
+      color: field === "title" ? "#404040" : "#353e42",
+      fontWeight: field === "title" ? "bold" : "regular",
+      audioUrl: null, voiceSupplement: "", annotations: [],
+    })),
+  ],
+  requirements: [
+    { id: "cover-image-brief", type: "image", title: "封面图片需求", target: { kind: "element", elementId: "cover-image" } },
+    { id: "cover-motion-brief", type: "motion", title: "封面动效需求", target: { kind: "element", elementId: "cover-motion" } },
+    { id: "cover-audio-brief", type: "audio", title: "封面语音", target: null },
+  ].map((slot) => ({ ...slot, brief: { html: "", text: "" }, asset: null, status: "pending" })) as AnimationBookPage["requirements"],
+});
 
 export const initialAnimationBook: AnimationBook = {
   id: "animation-book-demo",
   title: "我是有用的鹅卵石",
   language: "zh",
   coverLayout: "split",
-  cover: {
-    id: "cover",
-    label: "封面",
-    kind: "cover",
-    backgroundColor: "#fefcf8",
-    elements: [coverImage, coverTitle, coverTopic, coverWordCount, coverFiction, coverMotion],
-    appearanceOrder: [coverImage.id, coverTitle.id, coverTopic.id, coverWordCount.id, coverFiction.id, coverMotion.id],
-    playbackOrder: [],
-    requirements: [
-      requirement(
-        "cover-image-brief",
-        "image",
-        "封面主视觉",
-        "<p><strong>画面方向：</strong>保留温暖的绘本质感，北风和太阳需要有明显的角色关系。</p><p>构图以左右分区为主，主体清晰，适合儿童阅读。</p><figure><img src=\"/animation-book/assets/scene-2.jpeg\" alt=\"参考构图\"><figcaption>参考构图与色彩氛围</figcaption></figure>",
-        { kind: "element", elementId: coverImage.id },
-        uploadedAsset(asset("scene-1.jpeg"), "scene-1.jpeg", "image/jpeg"),
-      ),
-      requirement(
-        "cover-audio-brief",
-        "audio",
-        "封面语音",
-        "",
-        null,
-      ),
-      requirement(
-        "cover-motion-brief",
-        "motion",
-        "封面动效",
-        "",
-        { kind: "element", elementId: coverMotion.id },
-      ),
-    ],
-  },
+  cover: createEmptyCover(),
   pages: [
-    createPage(
-      "page-1",
-      "正文 1",
-      [firstText, firstImage, firstDecoration, firstMotion],
-      "#fefcf8",
-      [
-        requirement(
-          "page-1-image-brief",
-          "image",
-          "石头与阳光场景",
-          "<p>请保持画面明亮、干净，突出雨后阳光照在石头上的质感。</p><p><em>参考重点：</em>暖黄色光线、清晰的石头轮廓和留白。</p>",
-          { kind: "element", elementId: firstImage.id },
-          uploadedAsset(asset("scene-3.png"), "scene-3.png", "image/png"),
-        ),
-        requirement(
-          "page-1-motion-brief",
-          "motion",
-          "阳光闪动动效",
-          "<p>让阳光区域有轻微闪动感，节奏舒缓，不要影响正文阅读。</p><p>动效产物上传后先以静态占位展示。</p>",
-          { kind: "element", elementId: firstMotion.id },
-        ),
-        requirement(
-          "page-1-text-audio-brief",
-          "audio",
-          "正文语音",
-          "<p>语速偏慢，语气温和，注意“暴雨”和“太阳”两个词的情绪转折。</p>",
-          { kind: "element", elementId: firstText.id },
-        ),
-      ],
-    ),
-    createPage(
-      "page-2",
-      "正文 2",
-      [secondImage, secondText, secondBubble],
-      "#fefcf8",
-      [
-        requirement(
-          "page-2-image-brief",
-          "image",
-          "角色场景插画",
-          "<p>角色表情要有礼貌但略带期待，画面保留对话气泡的安全空间。</p>",
-          { kind: "element", elementId: secondImage.id },
-          uploadedAsset(asset("scene-9.png"), "scene-9.png", "image/png"),
-        ),
-        requirement(
-          "page-2-bubble-audio-brief",
-          "audio",
-          "角色对话语音",
-          "<p>声音要有请求感，句尾保持轻柔，不要过度夸张。</p>",
-          { kind: "element", elementId: secondBubble.id },
-        ),
-      ],
-    ),
-    createPage(
-      "page-3",
-      "正文 3",
-      [thirdTitle, thirdText, thirdImage],
-      "#fefcf8",
-      [
-        requirement(
-          "page-3-text-audio-brief",
-          "audio",
-          "正文语音",
-          "<p>语气轻快，强调故事从失望转向有用的情绪变化。</p>",
-          { kind: "element", elementId: thirdText.id },
-        ),
-      ],
-    ),
+    createEmptyPage("page-1", "正文 1", "page"),
   ],
 };
 
@@ -447,5 +109,6 @@ export const getElementLabel = (type: AnimationBookPage["elements"][number]["typ
   if (type === "image") return "图片";
   if (type === "motion") return "动效";
   if (type === "question") return "题";
+  if (type === "interaction") return "互动";
   return "气泡";
 };

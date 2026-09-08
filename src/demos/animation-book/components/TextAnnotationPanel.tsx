@@ -1,6 +1,7 @@
+import { participatesInPlayback } from "../types";
 import { useEffect, useState, type DragEvent as ReactDragEvent } from "react";
-import { Check, ChevronDown, ChevronUp, FileAudio, FileImage, Film, GripVertical, Info, ListOrdered, MessageCircle, Plus, Type, X } from "lucide-react";
-import type { BookElement, PlaybackDisplayMode, PlaybackOrderItem, QuestionElement, QuestionOption, TextAnnotation, TextAnnotationType } from "../types";
+import { Check, FileAudio, FileImage, Film, GripVertical, Info, ListOrdered, MessageCircle, Plus, Type, X } from "lucide-react";
+import type { BookElement, InteractionElement, InteractionDraft, PlaybackDisplayMode, PlaybackOrderItem, QuestionElement, QuestionOption, TextAnnotation, TextAnnotationType } from "../types";
 import { ANNOTATION_LABELS } from "../annotation-utils";
 
 export type AnnotationPanelTab = "voice" | TextAnnotationType | "standard" | "playback" | "question";
@@ -19,8 +20,12 @@ interface TextAnnotationPanelProps {
   activeTab: AnnotationPanelTab;
   annotations: TextAnnotation[];
   selectedAnnotationId: string | null;
-  standardInteractionCount: number;
+  standardInteractionCount?: number;
   question: QuestionElement | null;
+  interaction: InteractionElement | null;
+  onUpdateInteraction: (id: string, patch: Partial<InteractionDraft>) => void;
+  onSaveInteraction: (id: string) => void;
+  onCancelInteraction: (id: string) => void;
   questionOnly?: boolean;
   canEditQuestion: boolean;
   voiceItems: VoiceItem[];
@@ -51,8 +56,12 @@ export function TextAnnotationPanel({
   activeTab,
   annotations,
   selectedAnnotationId,
-  standardInteractionCount,
+  standardInteractionCount = 0,
   question,
+  interaction,
+  onUpdateInteraction,
+  onSaveInteraction,
+  onCancelInteraction,
   questionOnly = false,
   canEditQuestion,
   voiceItems,
@@ -83,7 +92,7 @@ export function TextAnnotationPanel({
       <div className="ab-context-panel-header" role="tablist" aria-label="正文内容配置">
         <div className="ab-context-tabs">
           {questionOnly ? (
-            question && (
+            (question || interaction) && (
               <ContextTab
                 active={activeTab === "question"}
                 label="题"
@@ -112,7 +121,7 @@ export function TextAnnotationPanel({
                   />
                 );
               })}
-              {question && (
+              {(question || interaction) && (
                 <ContextTab
                   active={activeTab === "question"}
                   label="题"
@@ -153,6 +162,10 @@ export function TextAnnotationPanel({
           />
         )}
         {activeTab === "standard" && <StandardInteractionPlaceholder />}
+        {activeTab === "question" && interaction && (
+          <InteractionPanel key={interaction.id} interaction={interaction} canEdit={canEditQuestion}
+            onUpdate={onUpdateInteraction} onSave={onSaveInteraction} onCancel={onCancelInteraction} />
+        )}
         {activeTab === "question" && question && (
           <QuestionPanel
             question={question}
@@ -392,6 +405,55 @@ function StandardInteractionPlaceholder() {
   );
 }
 
+function InteractionPanel({ interaction, canEdit, onUpdate, onSave, onCancel }: {
+  interaction: InteractionElement;
+  canEdit: boolean;
+  onUpdate: (id: string, patch: Partial<InteractionDraft>) => void;
+  onSave: (id: string) => void;
+  onCancel: (id: string) => void;
+}) {
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState("");
+  const voiceItem: VoiceItem = { id: interaction.id, type: "text", label: "投票标题", content: interaction.title, voiceSupplement: interaction.voiceSupplement };
+  const updateOption = (index: number, patch: Partial<InteractionElement["options"][number]>) => {
+    onUpdate(interaction.id, { options: interaction.options.map((option, i) => i === index ? { ...option, ...patch } : option) as InteractionElement["options"] });
+  };
+  return (
+    <div className="ab-question-panel ab-interaction-panel">
+      <div className="ab-question-panel-header">
+        <div className="ab-question-panel-meta"><span className="ab-question-meta-number">1</span><span className="ab-question-meta-tag">高段投票（投票互动）</span><span className="ab-question-meta-tag ab-interaction-key">QT_000002</span><span className="ab-question-meta-tag ab-question-meta-tag--muted">待同步</span></div>
+        <div className="ab-question-panel-actions">
+          <button type="button" className="ab-secondary-button" disabled={!canEdit} onClick={() => onCancel(interaction.id)}>取消</button>
+          <button type="button" className="ab-primary-button" disabled={!canEdit} onClick={() => onSave(interaction.id)}>保存</button>
+        </div>
+      </div>
+      <div className="ab-question-panel-body">
+        <section className="ab-question-section ab-question-section--main">
+          <div className="ab-question-section-heading"><h3>投票标题</h3></div>
+          <label className="ab-interaction-field"><span>标题文本</span><input aria-label="投票标题文本" value={interaction.title} readOnly={!canEdit} placeholder="请输入内容"
+            onChange={(event) => onUpdate(interaction.id, { title: Array.from(event.target.value).slice(0, 18).join("") })} /><small>{Array.from(interaction.title).length}/18</small></label>
+          <button type="button" className="ab-question-inline-button" disabled={!canEdit} onClick={() => { setVoiceDraft(interaction.voiceSupplement); setVoiceOpen(true); }}><Plus size={13} aria-hidden="true" />标题语音</button>
+          {!canEdit && <div className="ab-interaction-voice-copy">语音补充：{interaction.voiceSupplement || "暂无补充要求"}</div>}
+        </section>
+        <section className="ab-question-section ab-question-section--main">
+          <div className="ab-question-section-heading"><h3>投票选项</h3></div>
+          {interaction.options.map((option, index) => (
+            <div className="ab-interaction-option-editor" key={option.id}>
+              <h4>选项{index + 1}</h4>
+              <label className="ab-interaction-field"><span>选项文本</span><input aria-label={`投票选项${index + 1}文本`} value={option.content} readOnly={!canEdit} placeholder="请输入内容"
+                onChange={(event) => updateOption(index, { content: Array.from(event.target.value).slice(0, 9).join("") })} /><small>{Array.from(option.content).length}/9</small></label>
+              <fieldset className="ab-interaction-proportion" disabled={!canEdit}><legend>选项占比</legend>
+                {(["large", "small"] as const).map((value) => <label key={value}><input type="radio" name={interaction.id + option.id} checked={option.proportion === value} onChange={() => updateOption(index, { proportion: value })} />{value === "large" ? "大" : "小"}</label>)}
+              </fieldset>
+            </div>
+          ))}
+        </section>
+      </div>
+      {voiceOpen && canEdit && <VoiceSupplementModal item={voiceItem} draft={voiceDraft} onChange={setVoiceDraft} onCancel={() => setVoiceOpen(false)} onConfirm={() => { onUpdate(interaction.id, { voiceSupplement: voiceDraft }); setVoiceOpen(false); }} />}
+    </div>
+  );
+}
+
 function QuestionPanel({
   question,
   canEdit,
@@ -448,21 +510,8 @@ function QuestionPanel({
             <FileAudio size={13} aria-hidden="true" />题干语音
           </button>
 
-          <div className="ab-question-materials">
-            <span className="ab-question-field-label">材料</span>
-            <div className="ab-question-material-actions">
-              <button type="button" className="ab-question-material-button" disabled>＋文字材料</button>
-              <button type="button" className="ab-question-material-button" disabled>＋图片材料</button>
-              <button type="button" className="ab-question-material-button" disabled>＋听力材料</button>
-            </div>
-          </div>
-
           <div className="ab-question-options-heading">
             <span className="ab-question-field-label">选项</span>
-            <div className="ab-question-option-mode" role="group" aria-label="选项类型">
-              <button type="button" className={question.optionMode === "text" ? "is-active" : ""} disabled={!canEdit} onClick={() => onUpdate(question.id, { optionMode: "text" })}>文本选项</button>
-              <button type="button" className={question.optionMode === "image" ? "is-active" : ""} disabled>图片选项</button>
-            </div>
           </div>
 
           <div className="ab-question-options-grid">
@@ -515,10 +564,6 @@ function QuestionPanel({
         </section>
 
         <QuestionPlaceholderSection title="答案区">暂未设置</QuestionPlaceholderSection>
-        <QuestionPlaceholderSection title="解析区">
-          <span>解析内容</span>
-          <div className="ab-question-placeholder-actions"><button type="button" disabled>添加文本</button><button type="button" disabled>添加图片</button><button type="button" disabled>添加图文</button></div>
-        </QuestionPlaceholderSection>
         <QuestionPlaceholderSection title="标签区">
           <div className="ab-question-placeholder-tags"><span>真题来源</span><span>标签课程线</span><span>知识点</span><span>难度</span><span>能力</span></div>
         </QuestionPlaceholderSection>
@@ -540,6 +585,7 @@ function getPlaybackElementTitle(element: BookElement) {
   if (element.type === "text") return element.content || "未填写文本";
   if (element.type === "image") return element.alt || "未命名图片";
   if (element.type === "motion") return element.fileName || "未命名动效";
+  if (element.type === "interaction") return element.title || "投票互动";
   if (element.type === "question") return element.stem || "题目";
   return element.content || "未填写对话";
 }
@@ -548,6 +594,7 @@ function getPlaybackElementLabel(element: BookElement) {
   if (element.type === "text") return "文本";
   if (element.type === "image") return "图片";
   if (element.type === "motion") return "动效";
+  if (element.type === "interaction") return "互动";
   if (element.type === "question") return "题";
   return "对话";
 }
@@ -582,7 +629,7 @@ function PlaybackOrderPanel({
   const elementsById = new Map(elements.map((element) => [element.id, element]));
   const visibleItems = playbackOrder
     .map((item) => ({ item, element: elementsById.get(item.elementId) }))
-    .filter((entry): entry is { item: PlaybackOrderItem; element: BookElement } => Boolean(entry.element));
+    .filter((entry): entry is { item: PlaybackOrderItem; element: BookElement } => Boolean(entry.element && participatesInPlayback(entry.element)));
 
   const clearDragState = () => {
     setDraggedElementId(null);
@@ -635,6 +682,11 @@ function PlaybackOrderPanel({
               draggable
               aria-label={`拖动${getPlaybackElementLabel(element)}${index + 1}调整顺序`}
               onDragStart={(event) => handleDragStart(event, item.elementId)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+                event.preventDefault();
+                onMove(item.elementId, event.key === "ArrowUp" ? -1 : 1);
+              }}
               onDragEnd={clearDragState}
             >
               <GripVertical size={14} aria-hidden="true" />
@@ -656,10 +708,6 @@ function PlaybackOrderPanel({
               <option value="always">一直出现</option>
               <option value="onPlayback">播放时出现</option>
             </select>
-            <div className="ab-playback-order-actions" aria-label="调整顺序">
-              <button type="button" aria-label="上移" onClick={() => onMove(item.elementId, -1)} disabled={index === 0}><ChevronUp size={13} /></button>
-              <button type="button" aria-label="下移" onClick={() => onMove(item.elementId, 1)} disabled={index === visibleItems.length - 1}><ChevronDown size={13} /></button>
-            </div>
           </div>
         ))}
       </div>

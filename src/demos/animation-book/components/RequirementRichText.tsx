@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ChangeEvent, FocusEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { ChangeEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import {
   Bold,
   ChevronDown,
@@ -20,6 +20,7 @@ interface RequirementRichTextProps {
   autoFocus?: boolean;
   onFocus?: () => void;
   onBlur?: (event: FocusEvent<HTMLDivElement>) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 }
 
 const escapeHtml = (value: string) =>
@@ -53,6 +54,7 @@ export function RequirementRichText({
   autoFocus = false,
   onFocus,
   onBlur,
+  onKeyDown,
 }: RequirementRichTextProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -172,6 +174,7 @@ export function RequirementRichText({
         onKeyUp={saveSelection}
         onMouseUp={saveSelection}
         onFocus={onFocus}
+        onKeyDown={onKeyDown}
         onBlur={(event) => {
           saveSelection();
           onBlur?.(event);
