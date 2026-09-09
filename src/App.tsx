@@ -12,6 +12,7 @@ function AnalyticsTracker() {
   const location = useLocation();
 
   useEffect(() => {
+    if (location.pathname !== "/cover-generator") return;
     trackPageView(`${location.pathname}${location.search}`);
   }, [location.pathname, location.search]);
 
