@@ -7,11 +7,13 @@ type GtagArguments =
   | ['config', string, Record<string, unknown>?]
   | ['event', string, Record<string, unknown>?];
 
+type GtagDataLayerEntry = IArguments | GtagArguments;
+
 type Gtag = (...args: GtagArguments) => void;
 
 declare global {
   interface Window {
-    dataLayer: GtagArguments[];
+    dataLayer: GtagDataLayerEntry[];
     gtag?: Gtag;
   }
 }
@@ -26,9 +28,12 @@ export function initializeAnalytics(): void {
   if (typeof window === 'undefined' || !hasValidMeasurementId() || initialized) return;
 
   window.dataLayer = window.dataLayer || [];
-  window.gtag = window.gtag || ((...args: GtagArguments) => {
-    window.dataLayer.push(args);
-  });
+  window.gtag = window.gtag || function gtag(...args: GtagArguments): void {
+    // Google’s loader expects the official `arguments`-object queue format.
+    void args;
+    // eslint-disable-next-line prefer-rest-params -- required by the gtag queue contract
+    window.dataLayer.push(arguments);
+  };
 
   window.gtag('js', new Date());
   window.gtag('config', measurementId, { send_page_view: false });
