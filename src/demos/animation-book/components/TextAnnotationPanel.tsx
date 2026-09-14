@@ -1,12 +1,11 @@
 import { participatesInPlayback } from "../types";
 import { useEffect, useState, type DragEvent as ReactDragEvent } from "react";
 import { Check, FileAudio, FileImage, Film, GripVertical, Info, ListOrdered, MessageCircle, Plus, Type, X } from "lucide-react";
-import type { BookElement, InteractionElement, InteractionDraft, PlaybackDisplayMode, PlaybackOrderItem, QuestionElement, QuestionOption, TextAnnotation, TextAnnotationType } from "../types";
+import type { BookElement, InteractionElement, InteractionDraft, PlaybackDisplayMode, PlaybackOrderChild, PlaybackOrderItem, QuestionElement, QuestionOption, TextAnnotation, TextAnnotationType } from "../types";
 import { ANNOTATION_LABELS } from "../annotation-utils";
+import type { PlaybackBoundary, PlaybackDropPosition } from "../playbackOrderUtils";
 
 export type AnnotationPanelTab = "voice" | TextAnnotationType | "standard" | "playback" | "question";
-
-type PlaybackDropPosition = "before" | "after";
 
 interface VoiceItem {
   id: string;
@@ -34,7 +33,10 @@ interface TextAnnotationPanelProps {
   onChangeTab: (tab: AnnotationPanelTab) => void;
   onUpdatePlaybackDisplayMode: (elementId: string, displayMode: PlaybackDisplayMode) => void;
   onMovePlaybackOrder: (elementId: string, direction: -1 | 1) => void;
+  onMovePlaybackOrderToBoundary: (elementId: string, boundary: PlaybackBoundary) => void;
   onReorderPlaybackOrder: (elementId: string, targetElementId: string, position: PlaybackDropPosition) => void;
+  onGroupPlaybackOrder: (elementId: string, targetElementId: string) => void;
+  onUngroupPlaybackOrder: (elementId: string) => void;
   onSelectAnnotation: (annotationId: string) => void;
   onUpdateAnnotation: (annotationId: string, patch: Partial<TextAnnotation>) => void;
   onQuickFill: (annotationId: string) => void;
@@ -51,6 +53,8 @@ const splitLines = (value: string) => value.split(/\r?\n/).map((line) => line.tr
 
 const getAnnotationsByType = (annotations: TextAnnotation[], type: TextAnnotationType) =>
   annotations.filter((annotation) => annotation.type === type);
+
+type PlaybackDropIntent = PlaybackDropPosition | "inside";
 
 export function TextAnnotationPanel({
   activeTab,
@@ -70,7 +74,10 @@ export function TextAnnotationPanel({
   onChangeTab,
   onUpdatePlaybackDisplayMode,
   onMovePlaybackOrder,
+  onMovePlaybackOrderToBoundary,
   onReorderPlaybackOrder,
+  onGroupPlaybackOrder,
+  onUngroupPlaybackOrder,
   onSelectAnnotation,
   onUpdateAnnotation,
   onQuickFill,
@@ -143,13 +150,15 @@ export function TextAnnotationPanel({
         </div>
         {!questionOnly && (
           <div className="ab-context-playback-slot">
-            <ContextTab
-              active={activeTab === "playback"}
-              label="播放顺序"
-              icon={<ListOrdered size={13} aria-hidden="true" />}
-              className="ab-context-playback-tab"
+            <button
+              type="button"
+              className={`ab-context-playback-button${activeTab === "playback" ? " is-active" : ""}`}
+              aria-pressed={activeTab === "playback"}
               onClick={() => onChangeTab("playback")}
-            />
+            >
+              <ListOrdered size={16} aria-hidden="true" />
+              <span>播放顺序</span>
+            </button>
           </div>
         )}
       </div>
@@ -182,7 +191,10 @@ export function TextAnnotationPanel({
             playbackOrder={playbackOrder}
             onUpdateDisplayMode={onUpdatePlaybackDisplayMode}
             onMove={onMovePlaybackOrder}
+            onMoveToBoundary={onMovePlaybackOrderToBoundary}
             onReorder={onReorderPlaybackOrder}
+            onGroup={onGroupPlaybackOrder}
+            onUngroup={onUngroupPlaybackOrder}
           />
         )}
         {activeAnnotation && (
@@ -616,20 +628,30 @@ function PlaybackOrderPanel({
   playbackOrder,
   onUpdateDisplayMode,
   onMove,
+  onMoveToBoundary,
   onReorder,
+  onGroup,
+  onUngroup,
 }: {
   elements: BookElement[];
   playbackOrder: PlaybackOrderItem[];
   onUpdateDisplayMode: (elementId: string, displayMode: PlaybackDisplayMode) => void;
   onMove: (elementId: string, direction: -1 | 1) => void;
+  onMoveToBoundary: (elementId: string, boundary: PlaybackBoundary) => void;
   onReorder: (elementId: string, targetElementId: string, position: PlaybackDropPosition) => void;
+  onGroup: (elementId: string, targetElementId: string) => void;
+  onUngroup: (elementId: string) => void;
 }) {
   const [draggedElementId, setDraggedElementId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ elementId: string; position: PlaybackDropPosition } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ elementId: string; position: PlaybackDropIntent; invalidReason?: string } | null>(null);
   const elementsById = new Map(elements.map((element) => [element.id, element]));
-  const visibleItems = playbackOrder
+  const visibleRoots = playbackOrder
     .map((item) => ({ item, element: elementsById.get(item.elementId) }))
     .filter((entry): entry is { item: PlaybackOrderItem; element: BookElement } => Boolean(entry.element && participatesInPlayback(entry.element)));
+
+  const getVisibleChildren = (item: PlaybackOrderItem) => (item.children ?? [])
+    .map((child) => ({ item: child, element: elementsById.get(child.elementId) }))
+    .filter((entry): entry is { item: PlaybackOrderChild; element: BookElement } => Boolean(entry.element && participatesInPlayback(entry.element)));
 
   const clearDragState = () => {
     setDraggedElementId(null);
@@ -642,13 +664,30 @@ function PlaybackOrderPanel({
     setDraggedElementId(elementId);
   };
 
-  const handleDragOver = (event: ReactDragEvent<HTMLDivElement>, elementId: string) => {
+  const handleDragOver = (event: ReactDragEvent<HTMLDivElement>, elementId: string, level: 0 | 1) => {
     if (!draggedElementId || draggedElementId === elementId) return;
     event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
     const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = bounds.height > 0 ? (event.clientY - bounds.top) / bounds.height : 0.5;
+    const position: PlaybackDropIntent = level === 0
+      ? ratio < 0.3 ? "before" : ratio > 0.7 ? "after" : "inside"
+      : ratio < 0.3 ? "before" : ratio > 0.7 ? "after" : "inside";
+    const draggedRoot = visibleRoots.find((entry) => entry.item.elementId === draggedElementId);
+    const draggedParent = visibleRoots.find((entry) => entry.item.children?.some((child) => child.elementId === draggedElementId));
+    const invalidReason = position !== "inside"
+      ? undefined
+      : level === 1
+        ? "组内不支持嵌套分组"
+        : draggedRoot?.item.children?.length
+          ? "不能将分组放入分组"
+          : draggedParent?.item.elementId === elementId
+            ? "该项已在此分组"
+            : undefined;
     setDropTarget({
       elementId,
-      position: event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+      position,
+      ...(invalidReason ? { invalidReason } : {}),
     });
   };
 
@@ -656,8 +695,120 @@ function PlaybackOrderPanel({
     event.preventDefault();
     const sourceElementId = draggedElementId ?? event.dataTransfer.getData("text/plain");
     const position = dropTarget?.elementId === targetElementId ? dropTarget.position : "before";
-    if (sourceElementId && sourceElementId !== targetElementId) onReorder(sourceElementId, targetElementId, position);
+    if (sourceElementId && sourceElementId !== targetElementId && !dropTarget?.invalidReason) {
+      if (position === "inside") onGroup(sourceElementId, targetElementId);
+      else onReorder(sourceElementId, targetElementId, position);
+    }
     clearDragState();
+  };
+
+  const handleRootDropzoneDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    const lastRoot = visibleRoots[visibleRoots.length - 1];
+    if (!draggedElementId || !lastRoot || draggedElementId === lastRoot.item.elementId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTarget({ elementId: lastRoot.item.elementId, position: "after" });
+  };
+
+  const handleRootDropzoneDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    const lastRoot = visibleRoots[visibleRoots.length - 1];
+    if (!lastRoot) return;
+    handleDrop(event, lastRoot.item.elementId);
+  };
+
+  const handleHandleKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    elementId: string,
+    level: 0 | 1,
+    previousRootId: string | null,
+  ) => {
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      onMove(elementId, event.key === "ArrowUp" ? -1 : 1);
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      onMoveToBoundary(elementId, event.key === "Home" ? "start" : "end");
+      return;
+    }
+    if (event.key === "ArrowLeft" && level === 1) {
+      event.preventDefault();
+      onUngroup(elementId);
+      return;
+    }
+    if (event.key === "ArrowRight" && level === 0 && previousRootId) {
+      event.preventDefault();
+      onGroup(elementId, previousRootId);
+    }
+  };
+
+  const renderRow = ({
+    item,
+    element,
+    level,
+    numberLabel,
+    previousRootId,
+    groupChildCount = 0,
+  }: {
+    item: PlaybackOrderItem | PlaybackOrderChild;
+    element: BookElement;
+    level: 0 | 1;
+    numberLabel: string;
+    previousRootId: string | null;
+    groupChildCount?: number;
+  }) => {
+    const isDropTarget = dropTarget?.elementId === item.elementId;
+    const itemLabel = level === 0
+      ? `${getPlaybackElementLabel(element)}${numberLabel}`
+      : `${getPlaybackElementLabel(element)}组内项`;
+    return (
+      <div
+        key={item.elementId}
+        className={`ab-playback-order-item ab-playback-order-item--level-${level}${draggedElementId === item.elementId ? " is-dragging" : ""}${isDropTarget ? ` is-drop-${dropTarget.position}${dropTarget.invalidReason ? " is-drop-invalid" : ""}` : ""}`}
+        role="listitem"
+        onDragOver={(event) => handleDragOver(event, item.elementId, level)}
+        onDrop={(event) => handleDrop(event, item.elementId)}
+      >
+        <span className={`ab-playback-order-number${level === 1 ? " is-child" : ""}`} aria-hidden={level === 1 || undefined}>
+          {level === 0 ? numberLabel : ""}
+        </span>
+        <button
+          type="button"
+          className="ab-playback-drag-handle"
+          draggable
+          aria-label={`拖动${itemLabel}调整顺序、分组或移出分组`}
+          onDragStart={(event) => handleDragStart(event, item.elementId)}
+          onKeyDown={(event) => handleHandleKeyDown(event, item.elementId, level, previousRootId)}
+          onDragEnd={clearDragState}
+        >
+          <GripVertical size={14} aria-hidden="true" />
+        </button>
+        <div className="ab-playback-order-main">
+          <span className="ab-playback-order-kind">{getPlaybackElementLabel(element)}</span>
+          <div className={`ab-playback-order-copy ab-playback-order-copy--${element.type}`}>
+            {element.type !== "text" && <PlaybackElementPreview element={element} />}
+            <span>{getPlaybackElementTitle(element)}</span>
+          </div>
+          {level === 0 && groupChildCount > 0 && <span className="ab-playback-group-count">已分组 {groupChildCount}</span>}
+          {isDropTarget && dropTarget.position === "inside" && (
+            <span className={`ab-playback-drop-hint${dropTarget.invalidReason ? " is-invalid" : ""}`}>
+              {dropTarget.invalidReason ?? "放入此项"}
+            </span>
+          )}
+        </div>
+        <select
+          className="ab-playback-display-mode"
+          aria-label={`${itemLabel}展示方式`}
+          value={item.displayMode}
+          onPointerDown={(event) => event.stopPropagation()}
+          onChange={(event) => onUpdateDisplayMode(item.elementId, event.target.value as PlaybackDisplayMode)}
+        >
+          <option value="always">一直出现</option>
+          <option value="onPlayback">播放时出现</option>
+        </select>
+      </div>
+    );
   };
 
   return (
@@ -665,51 +816,42 @@ function PlaybackOrderPanel({
       <div className="ab-playback-panel-heading">
         <div className="ab-playback-panel-title"><ListOrdered size={16} aria-hidden="true" /><strong>播放顺序</strong></div>
       </div>
-      {visibleItems.length === 0 && <div className="ab-context-empty">当前页面暂无可排序元素</div>}
+      {visibleRoots.length === 0 && <div className="ab-context-empty">当前页面暂无可排序元素</div>}
       <div className="ab-playback-order-list" role="list">
-        {visibleItems.map(({ item, element }, index) => (
-          <div
-            key={item.elementId}
-            className={`ab-playback-order-item${draggedElementId === item.elementId ? " is-dragging" : ""}${dropTarget?.elementId === item.elementId ? ` is-drop-${dropTarget.position}` : ""}`}
-            role="listitem"
-            onDragOver={(event) => handleDragOver(event, item.elementId)}
-            onDrop={(event) => handleDrop(event, item.elementId)}
-          >
-            <span className="ab-playback-order-number">{index + 1}</span>
-            <button
-              type="button"
-              className="ab-playback-drag-handle"
-              draggable
-              aria-label={`拖动${getPlaybackElementLabel(element)}${index + 1}调整顺序`}
-              onDragStart={(event) => handleDragStart(event, item.elementId)}
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-                event.preventDefault();
-                onMove(item.elementId, event.key === "ArrowUp" ? -1 : 1);
-              }}
-              onDragEnd={clearDragState}
-            >
-              <GripVertical size={14} aria-hidden="true" />
-            </button>
-            <div className="ab-playback-order-main">
-              <span className="ab-playback-order-kind">{getPlaybackElementLabel(element)}</span>
-              <div className={`ab-playback-order-copy ab-playback-order-copy--${element.type}`}>
-                {element.type !== "text" && <PlaybackElementPreview element={element} />}
-                <span>{getPlaybackElementTitle(element)}</span>
-              </div>
+        {visibleRoots.map(({ item, element }, index) => {
+          const visibleChildren = getVisibleChildren(item);
+          return (
+            <div className={`ab-playback-order-group${visibleChildren.length > 0 ? " has-children" : ""}`} key={item.elementId}>
+              {renderRow({
+                item,
+                element,
+                level: 0,
+                numberLabel: String(index + 1),
+                previousRootId: index > 0 ? visibleRoots[index - 1].item.elementId : null,
+                groupChildCount: visibleChildren.length,
+              })}
+              {visibleChildren.length > 0 && (
+                <div className="ab-playback-order-children" role="list" aria-label={`${getPlaybackElementLabel(element)}${index + 1}组内播放顺序`}>
+                  {visibleChildren.map(({ item: child, element: childElement }, childIndex) => renderRow({
+                    item: child,
+                    element: childElement,
+                    level: 1,
+                    numberLabel: `${index + 1}-${childIndex + 1}`,
+                    previousRootId: null,
+                  }))}
+                </div>
+              )}
             </div>
-            <select
-              className="ab-playback-display-mode"
-              aria-label={`${getPlaybackElementLabel(element)}${index + 1}展示方式`}
-              value={item.displayMode}
-              onPointerDown={(event) => event.stopPropagation()}
-              onChange={(event) => onUpdateDisplayMode(item.elementId, event.target.value as PlaybackDisplayMode)}
-            >
-              <option value="always">一直出现</option>
-              <option value="onPlayback">播放时出现</option>
-            </select>
-          </div>
-        ))}
+          );
+        })}
+        {visibleRoots.length > 0 && (
+          <div
+            className={`ab-playback-root-dropzone${dropTarget?.position === "after" && dropTarget.elementId === visibleRoots[visibleRoots.length - 1].item.elementId ? " is-active" : ""}`}
+            aria-label="拖到此处放到播放顺序末尾"
+            onDragOver={handleRootDropzoneDragOver}
+            onDrop={handleRootDropzoneDrop}
+          />
+        )}
       </div>
     </section>
   );
@@ -753,8 +895,8 @@ function AnnotationEditor({
             <div className="ab-annotation-radio-group">
               <label><input type="radio" name={`pronunciation-${annotation.id}`} checked={annotation.pronunciationMode === "pinyin"} onChange={() => onUpdate({ pronunciationMode: "pinyin" })} />拼音</label>
               <label><input type="radio" name={`pronunciation-${annotation.id}`} checked={annotation.pronunciationMode === "phonetic"} onChange={() => onUpdate({ pronunciationMode: "phonetic" })} />音标</label>
-            </div>
           </div>
+        </div>
           <AnnotationField label="拼音" value={annotation.pinyin} onChange={(value) => onUpdate({ pinyin: value })} />
           <AnnotationField label="翻译" value={annotation.translations.join("\n")} rows={2} onChange={(value) => onUpdate({ translations: splitLines(value) })} />
           <AnnotationField label="扩展讲解" value={annotation.explanation} rows={2} onChange={(value) => onUpdate({ explanation: value })} />

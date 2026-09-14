@@ -1,4 +1,4 @@
-import { participatesInPlayback } from "./types";
+import { normalizePlaybackOrderItems } from "./playbackOrderUtils";
 import type { AnimationBook, AnimationBookPage, BookElement, CoverTextField, TextElement } from "./types";
 
 export const BUBBLE_DEFAULT_GEOMETRY = {
@@ -36,11 +36,14 @@ const migrateBubbleElement = (element: BookElement): BookElement => {
 };
 
 export const normalizeAnimationBook = (book: AnimationBook): AnimationBook => {
-  const normalizePage = (page: AnimationBookPage): AnimationBookPage => ({
-    ...page,
-    elements: page.elements.map(migrateBubbleElement),
-    playbackOrder: page.playbackOrder.filter((item) => page.elements.some((element) => element.id === (typeof item === "string" ? item : item.elementId) && participatesInPlayback(element))),
-  });
+  const normalizePage = (page: AnimationBookPage): AnimationBookPage => {
+    const elements = page.elements.map(migrateBubbleElement);
+    return {
+      ...page,
+      elements,
+      playbackOrder: normalizePlaybackOrderItems(page.playbackOrder, elements),
+    };
+  };
 
   return {
     ...book,

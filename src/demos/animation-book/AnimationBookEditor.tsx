@@ -64,8 +64,21 @@ import { RequirementsPanel } from "./components/RequirementsPanel";
 import { RequirementRichText, RichTextPreview } from "./components/RequirementRichText";
 import { TextAnnotationPanel, type AnnotationPanelTab, type VoiceItem } from "./components/TextAnnotationPanel";
 import {
+  groupPlaybackOrderItems,
+  movePlaybackOrderItemInOrder,
+  movePlaybackOrderItemToBoundary as movePlaybackOrderItemToBoundaryInOrder,
+  normalizePlaybackOrderItems,
+  removePlaybackElementFromOrder,
+  reorderPlaybackOrderItems,
+  ungroupPlaybackOrderItem,
+  updatePlaybackDisplayModeInOrder,
+  type PlaybackBoundary,
+  type PlaybackDropPosition,
+} from "./playbackOrderUtils";
+import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
+  EDITOR_HEIGHT,
   EDITOR_WIDTH,
   type AnimationBook,
   type AnimationBookPage,
@@ -96,8 +109,17 @@ type PanelTab = "requirements" | AnnotationPanelTab;
 const getDefaultPanelTab = (role: UserRole): PanelTab => role === "research" ? "voice" : "requirements";
 type CanvasRequirementMode = "editing" | "preview";
 type CanvasRequirementModes = Record<string, CanvasRequirementMode>;
+type CanvasZoomPreset = "current" | "medium" | "large" | "xlarge";
+type CanvasInteractionMode = "select" | "pan";
 type ResizeCorner = "top-left" | "top-right" | "middle-left" | "middle-right" | "bottom-left" | "bottom-right";
 type ElementGeometryPatch = Partial<Pick<BookElement, "x" | "y" | "width" | "height">> & Partial<Pick<BubbleElement, "widthMode" | "tailAngle">>;
+
+const CANVAS_ZOOM_PRESETS = {
+  current: { width: EDITOR_WIDTH, height: EDITOR_HEIGHT, scale: 1, label: "当前尺寸 640×360" },
+  medium: { width: 800, height: 450, scale: 1.25, label: "800×450" },
+  large: { width: 960, height: 540, scale: 1.5, label: "放大 960×540" },
+  xlarge: { width: 1200, height: 675, scale: 1.875, label: "1200×675" },
+} as const;
 
 interface PointerDrag {
   id: string;
@@ -106,6 +128,13 @@ interface PointerDrag {
   pointerX: number;
   pointerY: number;
   origin: Pick<BookElement, "x" | "y" | "width" | "height">;
+}
+
+interface CanvasPanDrag {
+  pointerX: number;
+  pointerY: number;
+  scrollLeft: number;
+  scrollTop: number;
 }
 
 interface PendingDelete {
@@ -131,7 +160,13 @@ interface PageAnnotation extends TextAnnotation {
 
 type PageDropPosition = "before" | "after";
 type LayerDropPosition = "before" | "after";
-type PlaybackDropPosition = "before" | "after";
+type ElementContextMenuAction = "top" | "up" | "down" | "bottom" | "toggle-visibility" | "delete";
+
+interface ElementContextMenuState {
+  elementId: string;
+  x: number;
+  y: number;
+}
 
 const BASIC_INFO_MUSIC_OPTIONS = [
   { id: "cicada", title: "静静引路--Cicada", duration: "03:54" },
@@ -143,7 +178,6 @@ const BASIC_INFO_MUSIC_OPTIONS = [
 
 const ANIMATION_BOOK_GRID_ASSET = "/animation-book/assets/animation-book-grid-system.png";
 const BODY_TEXT_FONT_FAMILY = '"PingFang SC", "PingFang TC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif';
-const BODY_TEXT_PARAGRAPH_INDENT = "32px";
 const TEXT_ELEMENT_PLACEHOLDER = "双击编辑文字";
 const BUBBLE_ELEMENT_PLACEHOLDER = "请输入对话";
 const BUBBLE_EDITOR_SCALE = CANVAS_WIDTH / EDITOR_WIDTH;
@@ -192,6 +226,17 @@ const elementName = (element: BookElement) => {
   if (element.type === "interaction") return element.title || "投票互动";
   if (element.type === "question") return element.stem.split("\n")[0] || "题目";
   return element.content.split("\n")[0] || "未命名气泡";
+};
+
+const getLayerElementName = (element: BookElement, elements: BookElement[]) => {
+  const name = elementName(element);
+  if (element.type !== "motion") return name;
+  const sameNamedMotions = elements.filter(
+    (candidate) => candidate.type === "motion" && elementName(candidate) === name,
+  );
+  if (sameNamedMotions.length < 2) return name;
+  const index = sameNamedMotions.findIndex((candidate) => candidate.id === element.id);
+  return `${name}${index + 1}`;
 };
 
 const getLayerTypeLabel = (type: string) => {
@@ -306,29 +351,8 @@ const createPlaybackOrder = (elements: BookElement[]): PlaybackOrderItem[] => el
     displayMode: "always",
   }));
 
-const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] => {
-  const elementsById = new Map(page.elements
-    .filter((element) => participatesInPlayback(element))
-    .map((element) => [element.id, element]));
-  const rawItems = (page.playbackOrder ?? []) as Array<PlaybackOrderItem | string>;
-  const normalized = rawItems
-    .map((item) => {
-      if (typeof item === "string") return { elementId: item, displayMode: "always" as const };
-      return {
-        elementId: item.elementId,
-        displayMode: item.displayMode === "onPlayback" ? "onPlayback" as const : "always" as const,
-      };
-    })
-    .filter((item) => elementsById.has(item.elementId));
-  const uniqueItems = normalized.filter((item, index) => normalized.findIndex((candidate) => candidate.elementId === item.elementId) === index);
-  const existingIds = new Set(uniqueItems.map((item) => item.elementId));
-  return [
-    ...uniqueItems,
-    ...page.elements
-      .filter((element) => participatesInPlayback(element) && !existingIds.has(element.id))
-      .map((element) => ({ elementId: element.id, displayMode: "always" as const })),
-  ];
-};
+const normalizePlaybackOrder = (page: AnimationBookPage): PlaybackOrderItem[] =>
+  normalizePlaybackOrderItems(page.playbackOrder, page.elements);
 
 const needsDeleteConfirmation = (element: BookElement) =>
   (element.type === "text" && element.content.trim().length > 0) ||
@@ -353,6 +377,7 @@ export function AnimationBookEditor() {
   const [dropTarget, setDropTarget] = useState<{ id: string; position: PageDropPosition } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [contextMenu, setContextMenu] = useState<ElementContextMenuState | null>(null);
   const [pendingCoverChange, setPendingCoverChange] = useState<{ kind: "layout"; value: CoverLayout } | { kind: "media"; value: "image" | "motion" } | null>(null);
   const coverConfirmRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -367,17 +392,26 @@ export function AnimationBookEditor() {
   const [backgroundMusicChoice, setBackgroundMusicChoice] = useState("spring");
   const [backgroundMusicStyle, setBackgroundMusicStyle] = useState("安静");
   const [showSafeArea, setShowSafeArea] = useState(true);
+  const [canvasZoomPreset, setCanvasZoomPreset] = useState<CanvasZoomPreset>("current");
+  const [canvasInteractionMode, setCanvasInteractionMode] = useState<CanvasInteractionMode>("select");
+  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const [autoHeightElementId, setAutoHeightElementId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const canvasViewportRef = useRef<HTMLDivElement>(null);
   const imageUploadInputRef = useRef<HTMLInputElement>(null);
   const [imageUploadTargetId, setImageUploadTargetId] = useState<string | null>(null);
   const coverMediaUploadInputRef = useRef<HTMLInputElement>(null);
   const [coverMediaUploadTargetId, setCoverMediaUploadTargetId] = useState<string | null>(null);
   const [coverMediaUploadAccept, setCoverMediaUploadAccept] = useState("image/*");
   const pointerDragRef = useRef<PointerDrag | null>(null);
+  const canvasPanRef = useRef<CanvasPanDrag | null>(null);
+  const canvasPanMovedRef = useRef(false);
   const bubbleNaturalWidthRef = useRef<Record<string, number>>({});
+  const contextMenuTriggerRef = useRef<HTMLElement | null>(null);
 
   const currentPage = getPage(book, viewId);
+  const canvasView = CANVAS_ZOOM_PRESETS[canvasZoomPreset];
+  const canvasScale = canvasView.scale;
   const isResearch = role === "research";
   const selectedElement = currentPage?.elements.find((element) => element.id === selectedId) ?? null;
   const currentQuestion = currentPage?.elements.find(
@@ -416,9 +450,30 @@ export function AnimationBookEditor() {
     [currentPage],
   );
 
+  useLayoutEffect(() => {
+    const viewport = canvasViewportRef.current;
+    if (!viewport) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showBasicInfo, viewId, canvasZoomPreset]);
+
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(null), 2200);
+  };
+
+  const closeContextMenu = (restoreFocus = true) => {
+    const trigger = contextMenuTriggerRef.current;
+    contextMenuTriggerRef.current = null;
+    setContextMenu(null);
+    if (restoreFocus && trigger && document.contains(trigger)) {
+      window.requestAnimationFrame(() => {
+        if (document.contains(trigger)) trigger.focus();
+      });
+    }
   };
 
   const changeCoverLayout = (layout: CoverLayout, confirmed = false) => {
@@ -484,6 +539,11 @@ export function AnimationBookEditor() {
 
   const selectView = (nextViewId: ViewId) => {
     const nextPage = getPage(book, nextViewId);
+    closeContextMenu(false);
+    canvasPanRef.current = null;
+    canvasPanMovedRef.current = false;
+    setCanvasInteractionMode("select");
+    setIsCanvasPanning(false);
     const nextVisibleElement = nextPage?.elements.find((element) => element.hidden !== true) ?? nextPage?.elements[0];
     setViewId(nextViewId);
     setSelectedId(nextVisibleElement?.id ?? null);
@@ -506,6 +566,11 @@ export function AnimationBookEditor() {
   };
 
   const selectRole = (nextRole: UserRole) => {
+    closeContextMenu(false);
+    canvasPanRef.current = null;
+    canvasPanMovedRef.current = false;
+    setCanvasInteractionMode("select");
+    setIsCanvasPanning(false);
     setRole(nextRole);
     setPanelTab(getDefaultPanelTab(nextRole));
     setEditingTextId(null);
@@ -579,6 +644,21 @@ export function AnimationBookEditor() {
       setTextSelection(null);
       setSelectedAnnotationId(null);
     }
+  };
+
+  const requestElementContextMenu = (
+    elementId: string,
+    position: { x: number; y: number },
+    trigger: HTMLElement | null = null,
+  ) => {
+    if (currentPage.kind !== "page" || canvasInteractionMode !== "select" || editingTextId) return false;
+    const element = currentPage.elements.find((candidate) => candidate.id === elementId);
+    if (!element) return false;
+    contextMenuTriggerRef.current = trigger;
+    trigger?.focus();
+    selectElement(elementId);
+    setContextMenu({ elementId, x: position.x, y: position.y });
+    return true;
   };
 
   const toggleElementRequirement = (element: BookElement) => {
@@ -774,6 +854,10 @@ export function AnimationBookEditor() {
   };
 
   const selectAnnotationTab = (tab: AnnotationPanelTab) => {
+    if (tab === "playback") {
+      setPanelTab((currentTab) => currentTab === "playback" ? "voice" : "playback");
+      return;
+    }
     setPanelTab(tab);
     if (tab === "question") {
       if (currentQuestion) selectElement(currentQuestion.id);
@@ -782,7 +866,7 @@ export function AnimationBookEditor() {
       setSelectedAnnotationId(null);
       return;
     }
-    if (tab === "voice" || tab === "standard" || tab === "playback") return;
+    if (tab === "voice" || tab === "standard") return;
     const firstAnnotation = currentAnnotations.find((annotation) => annotation.type === tab);
     setSelectedAnnotationId(firstAnnotation?.id ?? null);
   };
@@ -908,10 +992,6 @@ export function AnimationBookEditor() {
   };
 
   const addMotion = () => {
-    if (currentPage.elements.some((element) => element.type === "motion")) {
-      notify("每页最多添加一个动效占位");
-      return;
-    }
     addElement({
       id: createId("motion"),
       type: "motion",
@@ -1247,7 +1327,7 @@ export function AnimationBookEditor() {
       ...page,
       elements: page.elements.filter((element) => element.id !== elementId),
       appearanceOrder: page.appearanceOrder.filter((id) => id !== elementId),
-      playbackOrder: normalizePlaybackOrder(page).filter((item) => item.elementId !== elementId),
+      playbackOrder: removePlaybackElementFromOrder(normalizePlaybackOrder(page), elementId),
       requirements: page.requirements.filter(
         (requirement) => requirement.target?.kind !== "element" || requirement.target.elementId !== elementId,
       ),
@@ -1283,6 +1363,7 @@ export function AnimationBookEditor() {
 
   const addPage = () => {
     if (!isResearch) return;
+    closeContextMenu(false);
     const id = createId("page");
     const newPage: AnimationBookPage = {
       id,
@@ -1318,6 +1399,7 @@ export function AnimationBookEditor() {
     if (index < 0) return;
     const nextPage = book.pages[index + 1] ?? book.pages[index - 1];
     const isCurrentPage = viewId === pageId;
+    closeContextMenu(false);
     setBook((previous) => ({
       ...previous,
       pages: previous.pages
@@ -1412,6 +1494,44 @@ export function AnimationBookEditor() {
     resetPageDrag();
   };
 
+  const beginCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (canvasInteractionMode !== "pan" || event.button !== 0) return;
+    const viewport = canvasViewportRef.current;
+    if (!viewport) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    canvasPanRef.current = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop,
+    };
+    canvasPanMovedRef.current = false;
+    setIsCanvasPanning(true);
+  };
+
+  const handleCanvasPointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>) => {
+    beginCanvasPan(event);
+  };
+
+  const handleCanvasKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (canvasInteractionMode !== "pan") return;
+    const viewport = canvasViewportRef.current;
+    if (!viewport) return;
+    const step = event.shiftKey ? 100 : 40;
+    let deltaX = 0;
+    let deltaY = 0;
+    if (event.key === "ArrowLeft") deltaX = -step;
+    if (event.key === "ArrowRight") deltaX = step;
+    if (event.key === "ArrowUp") deltaY = -step;
+    if (event.key === "ArrowDown") deltaY = step;
+    if (deltaX === 0 && deltaY === 0) return;
+    event.preventDefault();
+    viewport.scrollLeft += deltaX;
+    viewport.scrollTop += deltaY;
+  };
+
   const beginPointerDrag = (
     event: ReactPointerEvent<HTMLElement>,
     element: BookElement,
@@ -1419,6 +1539,7 @@ export function AnimationBookEditor() {
     corner?: ResizeCorner,
   ) => {
     event.stopPropagation();
+    if (event.button !== 0 || canvasInteractionMode === "pan") return;
     if (currentPage?.kind === "cover") {
       setSelectedId(element.id);
       return;
@@ -1450,6 +1571,17 @@ export function AnimationBookEditor() {
   };
 
   const handleCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = canvasPanRef.current;
+    if (pan) {
+      const viewport = canvasViewportRef.current;
+      if (!viewport) return;
+      const deltaX = event.clientX - pan.pointerX;
+      const deltaY = event.clientY - pan.pointerY;
+      if (Math.hypot(deltaX, deltaY) > 3) canvasPanMovedRef.current = true;
+      viewport.scrollLeft = pan.scrollLeft - deltaX;
+      viewport.scrollTop = pan.scrollTop - deltaY;
+      return;
+    }
     const drag = pointerDragRef.current;
     const canvas = canvasRef.current;
     if (!drag || !canvas) return;
@@ -1525,6 +1657,8 @@ export function AnimationBookEditor() {
   };
 
   const endPointerDrag = () => {
+    canvasPanRef.current = null;
+    setIsCanvasPanning(false);
     pointerDragRef.current = null;
     setAutoHeightElementId(null);
   };
@@ -1540,8 +1674,12 @@ export function AnimationBookEditor() {
     };
   };
 
-  const moveLayer = (elementId: string, direction: "up" | "down" | "top" | "bottom") => {
-    if (!isResearch || currentPage.kind === "cover") return;
+  const moveLayer = (
+    elementId: string,
+    direction: "up" | "down" | "top" | "bottom",
+    allowProduction = false,
+  ) => {
+    if ((!isResearch && !allowProduction) || currentPage.kind === "cover") return;
     modifyCurrentPage((page) => {
       const ordered = [...page.elements].sort((a, b) => b.zIndex - a.zIndex);
       const index = ordered.findIndex((element) => element.id === elementId);
@@ -1573,8 +1711,8 @@ export function AnimationBookEditor() {
     });
   };
 
-  const toggleElementVisibility = (elementId: string) => {
-    if (!isResearch || currentPage.kind === "cover") return;
+  const toggleElementVisibility = (elementId: string, allowProduction = false) => {
+    if ((!isResearch && !allowProduction) || currentPage.kind === "cover") return;
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
     if (!element) return;
     const hidden = element.hidden !== true;
@@ -1589,14 +1727,35 @@ export function AnimationBookEditor() {
     }
   };
 
+  const handleElementContextMenuAction = (action: ElementContextMenuAction) => {
+    if (!contextMenu) return;
+    const element = currentPage.elements.find((candidate) => candidate.id === contextMenu.elementId);
+    if (!element || currentPage.kind !== "page") {
+      closeContextMenu(false);
+      return;
+    }
+    if (action === "delete") {
+      if (!isResearch) return;
+      closeContextMenu(true);
+      requestRemoveElement(element.id);
+      return;
+    }
+    closeContextMenu(true);
+    if (action === "toggle-visibility") {
+      toggleElementVisibility(element.id, true);
+      return;
+    }
+    moveLayer(element.id, action, true);
+  };
+
   const updatePlaybackDisplayMode = (elementId: string, displayMode: PlaybackDisplayMode) => {
     if (!isResearch) return;
     modifyCurrentPage((page) => {
       const items = normalizePlaybackOrder(page);
-      const index = items.findIndex((item) => item.elementId === elementId);
-      if (index < 0 || items[index].displayMode === displayMode) return page;
-      items[index] = { ...items[index], displayMode };
-      return { ...page, playbackOrder: items };
+      const currentItem = items.find((item) => item.elementId === elementId)
+        ?? items.flatMap((item) => item.children ?? []).find((item) => item.elementId === elementId);
+      if (!currentItem || currentItem.displayMode === displayMode) return page;
+      return { ...page, playbackOrder: updatePlaybackDisplayModeInOrder(items, elementId, displayMode) };
     });
   };
 
@@ -1604,11 +1763,19 @@ export function AnimationBookEditor() {
     if (!isResearch) return;
     modifyCurrentPage((page) => {
       const items = normalizePlaybackOrder(page);
-      const index = items.findIndex((item) => item.elementId === elementId);
-      const nextIndex = index + direction;
-      if (index < 0 || nextIndex < 0 || nextIndex >= items.length) return page;
-      [items[index], items[nextIndex]] = [items[nextIndex], items[index]];
-      return { ...page, playbackOrder: items };
+      const nextItems = movePlaybackOrderItemInOrder(items, elementId, direction);
+      if (nextItems.every((item, index) => item === items[index])) return page;
+      return { ...page, playbackOrder: nextItems };
+    });
+  };
+
+  const movePlaybackOrderItemToBoundary = (elementId: string, boundary: PlaybackBoundary) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => {
+      const items = normalizePlaybackOrder(page);
+      const nextItems = movePlaybackOrderItemToBoundaryInOrder(items, elementId, boundary);
+      if (nextItems.every((item, index) => item === items[index])) return page;
+      return { ...page, playbackOrder: nextItems };
     });
   };
 
@@ -1616,13 +1783,29 @@ export function AnimationBookEditor() {
     if (!isResearch || elementId === targetElementId) return;
     modifyCurrentPage((page) => {
       const items = normalizePlaybackOrder(page);
-      const sourceIndex = items.findIndex((item) => item.elementId === elementId);
-      const targetIndex = items.findIndex((item) => item.elementId === targetElementId);
-      if (sourceIndex < 0 || targetIndex < 0) return page;
-      const [moved] = items.splice(sourceIndex, 1);
-      const insertionIndex = items.findIndex((item) => item.elementId === targetElementId) + (position === "after" ? 1 : 0);
-      items.splice(Math.max(0, insertionIndex), 0, moved);
-      return { ...page, playbackOrder: items };
+      const nextItems = reorderPlaybackOrderItems(items, elementId, targetElementId, position);
+      if (nextItems.every((item, index) => item === items[index])) return page;
+      return { ...page, playbackOrder: nextItems };
+    });
+  };
+
+  const groupPlaybackOrder = (elementId: string, targetElementId: string) => {
+    if (!isResearch || elementId === targetElementId) return;
+    modifyCurrentPage((page) => {
+      const items = normalizePlaybackOrder(page);
+      const nextItems = groupPlaybackOrderItems(items, elementId, targetElementId);
+      if (nextItems.every((item, index) => item === items[index])) return page;
+      return { ...page, playbackOrder: nextItems };
+    });
+  };
+
+  const ungroupPlaybackOrder = (elementId: string) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => {
+      const items = normalizePlaybackOrder(page);
+      const nextItems = ungroupPlaybackOrderItem(items, elementId);
+      if (nextItems.every((item, index) => item === items[index])) return page;
+      return { ...page, playbackOrder: nextItems };
     });
   };
 
@@ -1630,6 +1813,12 @@ export function AnimationBookEditor() {
     const target = event.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
     if (event.key === "Escape") {
+      if (canvasInteractionMode === "pan") {
+        canvasPanRef.current = null;
+        setIsCanvasPanning(false);
+        setCanvasInteractionMode("select");
+        return;
+      }
       const selectedVisualRequirement = selectedElement && (selectedElement.type === "image" || selectedElement.type === "motion")
         ? getVisualRequirement(currentPage, selectedElement)
         : undefined;
@@ -1659,6 +1848,9 @@ export function AnimationBookEditor() {
   const isContextPanel = (panelTab === "question" && Boolean(currentQuestion)) || currentPage.kind === "page" && isResearch && (
     panelTab === "voice" || panelTab === "word" || panelTab === "sentence" || panelTab === "note" || panelTab === "standard" || panelTab === "playback"
   );
+  const contextMenuElement = contextMenu
+    ? currentPage.elements.find((element) => element.id === contextMenu.elementId) ?? null
+    : null;
 
   return (
     <div className="animation-book-editor" onKeyDown={handleKeyDown}>
@@ -1727,7 +1919,10 @@ export function AnimationBookEditor() {
               type="button"
               className={`ab-basic-info-button${showBasicInfo ? " is-active" : ""}`}
               aria-pressed={showBasicInfo}
-              onClick={() => setShowBasicInfo((open) => !open)}
+              onClick={() => {
+                closeContextMenu(false);
+                setShowBasicInfo((open) => !open);
+              }}
             >
               <span>基础信息</span>
             </button>
@@ -1777,8 +1972,8 @@ export function AnimationBookEditor() {
             <>
               <div className="ab-stage-scroll">
                 <div className="ab-canvas-zone">
-                  {isResearch && <div className="ab-editor-sticky-toolbar">
-                    <div className="ab-editor-toolbar" aria-label={isResearch ? "编辑画布工具" : "制作工具"}>
+                  <div className="ab-editor-sticky-toolbar">
+                    <div className="ab-editor-toolbar" aria-label={isResearch ? "编辑画布工具" : "画布视图工具"}>
                       {isResearch && (
                         <div className="ab-editor-toolbar-group ab-editor-history" aria-label="编辑历史">
                           <ToolButton icon={<Undo2 size={18} />} label="撤销" displayLabel="撤销" disabled />
@@ -1787,7 +1982,31 @@ export function AnimationBookEditor() {
                       )}
                       {isResearch && <span className="ab-tool-divider" />}
                       <div className="ab-editor-toolbar-group">
-                        <ToolButton icon={<MousePointer2 size={18} />} label="选择" displayLabel="选择" active={!isTextToolActive} />
+                        <ToolButton
+                          icon={<MousePointer2 size={18} />}
+                          label="选择"
+                          displayLabel="选择"
+                          active={canvasInteractionMode === "select"}
+                          toggle
+                          onClick={() => {
+                            closeContextMenu(false);
+                            setCanvasInteractionMode("select");
+                            setIsCanvasPanning(false);
+                          }}
+                        />
+                        <ToolButton
+                          icon={<Hand size={18} />}
+                          label="移动画布"
+                          displayLabel="移动"
+                          active={canvasInteractionMode === "pan"}
+                          toggle
+                          onClick={() => {
+                            closeContextMenu(false);
+                            setCanvasInteractionMode("pan");
+                            setSelectedAnnotationId(null);
+                            setIsCanvasPanning(false);
+                          }}
+                        />
                         {isResearch && currentPage.kind === "page" ? (
                           <>
                             <ToolButton icon={<Type size={18} />} label="添加文本" displayLabel="文字" active={isTextToolActive} onClick={addText} />
@@ -1819,11 +2038,20 @@ export function AnimationBookEditor() {
                           </>
                         ) : null}
                       </div>
-                      {isResearch && (
-                        <div className="ab-editor-toolbar-settings">
-                          <span className="ab-editor-zoom" aria-label="缩放比例">50%<ChevronDown size={14} aria-hidden="true" /></span>
-                        </div>
-                      )}
+                      <div className="ab-editor-toolbar-settings">
+                        <label className="ab-editor-zoom" aria-label="画布缩放">
+                          <select
+                            aria-label="画布缩放"
+                            value={canvasZoomPreset}
+                            onChange={(event) => setCanvasZoomPreset(event.target.value as CanvasZoomPreset)}
+                          >
+                            {Object.entries(CANVAS_ZOOM_PRESETS).map(([value, preset]) => (
+                              <option key={value} value={value}>{preset.label}</option>
+                            ))}
+                          </select>
+                          <ChevronDown size={14} aria-hidden="true" />
+                        </label>
+                      </div>
                       <div className="ab-canvas-grid-toggle ab-editor-toolbar-grid" aria-label="动画书网格系统">
                         <span>网格系统</span>
                         <button
@@ -1838,7 +2066,7 @@ export function AnimationBookEditor() {
                         </button>
                       </div>
                     </div>
-                  </div>}
+                  </div>
 
                   {currentPage.kind === "cover" && (
                     <CoverLayoutConfig
@@ -1848,16 +2076,30 @@ export function AnimationBookEditor() {
                     />
                   )}
 
+                  <div className="ab-canvas-viewport" ref={canvasViewportRef}>
                   <div className="ab-canvas-shadow">
                 <div
                   ref={canvasRef}
-                  className={`ab-canvas ab-canvas--${currentPage?.kind ?? "page"}`}
-                  style={{ backgroundColor: currentPage?.backgroundColor ?? "#fefcf8" }}
+                  className={`ab-canvas ab-canvas--${currentPage?.kind ?? "page"}${canvasInteractionMode === "pan" ? " ab-canvas--pan" : ""}${isCanvasPanning ? " is-panning" : ""}`}
+                  style={{
+                    width: `${canvasView.width}px`,
+                    height: `${canvasView.height}px`,
+                    backgroundColor: currentPage?.backgroundColor ?? "#fefcf8",
+                    "--ab-content-scale": canvasScale,
+                  } as React.CSSProperties}
+                  onPointerDownCapture={handleCanvasPointerDownCapture}
+                  onKeyDown={handleCanvasKeyDown}
+                  tabIndex={canvasInteractionMode === "pan" ? 0 : -1}
+                  aria-label="动画书画布视口"
                   onPointerDown={(event) => {
                     if ((event.target as HTMLElement).closest(".ab-canvas-requirement")) return;
                     finishActiveCanvasRequirementEdit();
                   }}
                   onClick={() => {
+                    if (canvasInteractionMode === "pan" || canvasPanMovedRef.current) {
+                      canvasPanMovedRef.current = false;
+                      return;
+                    }
                     finishActiveCanvasRequirementEdit();
                     setSelectedId(null);
                     setEditingTextId(null);
@@ -1936,6 +2178,7 @@ export function AnimationBookEditor() {
                           >
                             <CanvasElement
                               element={element}
+                              canvasScale={canvasScale}
                               selected={selectedId === element.id}
                               editing={editingTextId === element.id}
                               canEditText={isResearch && currentPage.kind === "page"}
@@ -1955,6 +2198,7 @@ export function AnimationBookEditor() {
                               onNaturalWidthChange={(width) => { bubbleNaturalWidthRef.current[element.id] = width; }}
                               onTailAngleChange={(angle) => updateElementGeometry(element.id, { tailAngle: angle })}
                               onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
+                              onRequestContextMenu={(position, trigger) => requestElementContextMenu(element.id, position, trigger)}
                             />
                             <div className="ab-canvas-requirement-layer">
                               <CanvasRequirement
@@ -1978,6 +2222,7 @@ export function AnimationBookEditor() {
                         ) : (
                           <CanvasElement
                             element={element}
+                            canvasScale={canvasScale}
                             selected={selectedId === element.id}
                             editing={editingTextId === element.id}
                             canEditText={isResearch && currentPage.kind === "page"}
@@ -2006,6 +2251,7 @@ export function AnimationBookEditor() {
                             onNaturalWidthChange={(width) => { bubbleNaturalWidthRef.current[element.id] = width; }}
                             onTailAngleChange={(angle) => updateElementGeometry(element.id, { tailAngle: angle })}
                             onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
+                            onRequestContextMenu={(position, trigger) => requestElementContextMenu(element.id, position, trigger)}
                           />
                         )}
                       </Fragment>
@@ -2045,6 +2291,7 @@ export function AnimationBookEditor() {
                           onReorder={reorderLayer}
                           onToggleVisibility={toggleElementVisibility}
                           onOpenRequirement={openElementRequirementPanel}
+                          onRequestContextMenu={(elementId, position, trigger) => requestElementContextMenu(elementId, position, trigger)}
                         />
                       )}
                       <button
@@ -2071,9 +2318,10 @@ export function AnimationBookEditor() {
                   )}
                 </div>
                   </div>
+                  </div>
                 </div>
 
-                <div className={`ab-editor-panel${currentPage.kind === "cover" ? " ab-editor-panel--cover" : ""}`}>
+                <div className={`ab-editor-panel${currentPage.kind === "cover" ? " ab-editor-panel--cover" : ""}${isContextPanel ? " ab-editor-panel--context" : ""}`}>
               {isContextPanel ? (
                 <TextAnnotationPanel
                   activeTab={panelTab}
@@ -2092,7 +2340,10 @@ export function AnimationBookEditor() {
                   onChangeTab={selectAnnotationTab}
                   onUpdatePlaybackDisplayMode={updatePlaybackDisplayMode}
                   onMovePlaybackOrder={movePlaybackOrderItem}
+                  onMovePlaybackOrderToBoundary={movePlaybackOrderItemToBoundary}
                   onReorderPlaybackOrder={reorderPlaybackOrder}
+                  onGroupPlaybackOrder={groupPlaybackOrder}
+                  onUngroupPlaybackOrder={ungroupPlaybackOrder}
                         onSelectAnnotation={selectAnnotation}
                         onUpdateAnnotation={updateAnnotation}
                   onQuickFill={quickFillAnnotationVoice}
@@ -2142,6 +2393,16 @@ export function AnimationBookEditor() {
         </section>
       </main>
 
+      {contextMenu && contextMenuElement && currentPage.kind === "page" && (
+        <ElementContextMenu
+          element={contextMenuElement}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          canDelete={isResearch}
+          onAction={handleElementContextMenuAction}
+          onClose={closeContextMenu}
+        />
+      )}
       {toast && <div className="ab-toast" role="status"><Check size={15} />{toast}</div>}
       <dialog
         ref={coverConfirmRef}
@@ -2214,6 +2475,145 @@ export function AnimationBookEditor() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ElementContextMenu({
+  element,
+  x,
+  y,
+  canDelete,
+  onAction,
+  onClose,
+}: {
+  element: BookElement;
+  x: number;
+  y: number;
+  canDelete: boolean;
+  onAction: (action: ElementContextMenuAction) => void;
+  onClose: (restoreFocus?: boolean) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [position, setPosition] = useState({ left: x, top: y });
+  const [isPositioned, setIsPositioned] = useState(false);
+  const menuItems = useMemo(() => [
+    { action: "top" as const, label: "置于顶层", disabled: false },
+    { action: "up" as const, label: "上移一层", disabled: false },
+    { action: "down" as const, label: "下移一层", disabled: false },
+    { action: "bottom" as const, label: "置于底层", disabled: false },
+    { action: "toggle-visibility" as const, label: element.hidden === true ? "显示" : "隐藏", disabled: false },
+    { action: "delete" as const, label: "删除", disabled: !canDelete },
+  ], [canDelete, element.hidden]);
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const margin = 8;
+    const rect = menu.getBoundingClientRect();
+    const left = clamp(x, margin, Math.max(margin, window.innerWidth - rect.width - margin));
+    const top = clamp(y, margin, Math.max(margin, window.innerHeight - rect.height - margin));
+    setPosition({ left, top });
+    setIsPositioned(true);
+  }, [x, y]);
+
+  useEffect(() => {
+    const firstEnabledIndex = menuItems.findIndex((item) => !item.disabled);
+    const frame = window.requestAnimationFrame(() => itemRefs.current[firstEnabledIndex]?.focus());
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      onClose(false);
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      onClose(false);
+    };
+    const handleResize = () => onClose(false);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("focusin", handleFocusIn);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("focusin", handleFocusIn);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [menuItems, onClose]);
+
+  const moveFocus = (currentIndex: number, direction: 1 | -1) => {
+    const enabledIndexes = menuItems
+      .map((item, index) => item.disabled ? -1 : index)
+      .filter((index) => index >= 0);
+    if (enabledIndexes.length === 0) return;
+    const currentEnabledIndex = enabledIndexes.indexOf(currentIndex);
+    const nextEnabledIndex = currentEnabledIndex < 0
+      ? (direction === 1 ? 0 : enabledIndexes.length - 1)
+      : (currentEnabledIndex + direction + enabledIndexes.length) % enabledIndexes.length;
+    itemRefs.current[enabledIndexes[nextEnabledIndex]]?.focus();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    const activeIndex = itemRefs.current.findIndex((item) => item === document.activeElement);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose(true);
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveFocus(activeIndex, 1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveFocus(activeIndex, -1);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      moveFocus(-1, 1);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      moveFocus(-1, -1);
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      const item = menuItems[activeIndex];
+      if (!item || item.disabled) return;
+      event.preventDefault();
+      onAction(item.action);
+    }
+  };
+
+  return (
+    <div
+      ref={menuRef}
+      className="ab-element-context-menu"
+      role="menu"
+      aria-label={`${elementName(element)}操作菜单`}
+      onKeyDown={handleKeyDown}
+      style={{ left: `${position.left}px`, top: `${position.top}px`, visibility: isPositioned ? "visible" : "hidden" }}
+    >
+      {menuItems.map((item, index) => (
+        <button
+          key={item.action}
+          ref={(node) => { itemRefs.current[index] = node; }}
+          type="button"
+          role="menuitem"
+          className={item.action === "delete" ? "is-danger" : undefined}
+          disabled={item.disabled}
+          aria-disabled={item.disabled}
+          onClick={() => {
+            if (!item.disabled) onAction(item.action);
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -2297,6 +2697,7 @@ function ToolButton({
   displayLabel = label,
   onClick,
   active = false,
+  toggle = false,
   disabled = false,
 }: {
   icon: React.ReactNode;
@@ -2304,10 +2705,11 @@ function ToolButton({
   displayLabel?: string;
   onClick?: () => void;
   active?: boolean;
+  toggle?: boolean;
   disabled?: boolean;
 }) {
   return (
-    <button type="button" className={`ab-tool-button${active ? " is-active" : ""}${disabled ? " is-disabled" : ""}`} onClick={onClick} aria-label={label} title={label} disabled={disabled}>
+    <button type="button" className={`ab-tool-button${active ? " is-active" : ""}${disabled ? " is-disabled" : ""}`} onClick={onClick} aria-label={label} title={label} aria-pressed={toggle ? active : undefined} disabled={disabled}>
       <span className="ab-tool-icon" aria-hidden="true">{icon}</span>
       <span className="ab-tool-label">{displayLabel}</span>
     </button>
@@ -2532,13 +2934,13 @@ function SafeAreaOverlay() {
   );
 }
 
-const getCanvasTextStyle = (element: TextElement, isBodyText: boolean) => ({
+const getCanvasTextStyle = (element: TextElement, isBodyText: boolean, canvasScale = 1) => ({
   ...(isBodyText ? {
     fontFamily: BODY_TEXT_FONT_FAMILY,
-    lineHeight: "24px",
-    textIndent: BODY_TEXT_PARAGRAPH_INDENT,
+    lineHeight: `${24 * canvasScale}px`,
+    textIndent: `${32 * canvasScale}px`,
   } : {}),
-  fontSize: (element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH)) + "px",
+  fontSize: (element.fontSize * (EDITOR_WIDTH / CANVAS_WIDTH) * canvasScale) + "px",
   color: element.color,
   fontWeight: element.fontWeight === "bold" ? 700 : element.fontWeight === "medium" ? 500 : 400,
   fontStyle: element.italic ? "italic" : "normal",
@@ -2548,6 +2950,7 @@ const getCanvasTextStyle = (element: TextElement, isBodyText: boolean) => ({
 
 function CanvasElement({
   element,
+  canvasScale,
   selected,
   editing,
   canEditText,
@@ -2571,8 +2974,10 @@ function CanvasElement({
   onRequestImageUpload,
   onDeleteImage,
   onPointerDown,
+  onRequestContextMenu,
 }: {
   element: BookElement;
+  canvasScale: number;
   selected: boolean;
   editing: boolean;
   canEditText: boolean;
@@ -2596,6 +3001,7 @@ function CanvasElement({
   onRequestImageUpload: () => void;
   onDeleteImage: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, mode: "move" | "resize" | "tail", corner?: ResizeCorner) => void;
+  onRequestContextMenu?: (position: { x: number; y: number }, trigger: HTMLElement | null) => boolean;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
   const textContentRef = useRef<HTMLDivElement>(null);
@@ -2607,6 +3013,9 @@ function CanvasElement({
   const editableElementContent = element.type === "text" || element.type === "bubble" ? element.content : "";
   const bubbleWidthMode = element.type === "bubble" ? element.widthMode : undefined;
   const elementX = element.x;
+  const bubbleEditorScale = BUBBLE_EDITOR_SCALE / canvasScale;
+  const bubbleOuterChromePx = BUBBLE_OUTER_CHROME_PX * canvasScale;
+  const bubbleNaturalWidthBufferPx = BUBBLE_NATURAL_WIDTH_BUFFER_PX * canvasScale;
 
   useLayoutEffect(() => {
     if (!editing || !canEditText || (element.type !== "text" && element.type !== "bubble") || !textContentRef.current) return;
@@ -2660,10 +3069,11 @@ function CanvasElement({
       measurement.style.whiteSpace = "pre";
       measurement.style.visibility = "hidden";
       measurement.style.pointerEvents = "none";
+      measurement.style.setProperty("--ab-content-scale", String(canvasScale));
       document.body.appendChild(measurement);
       const measuredWidth = measurement.getBoundingClientRect().width;
       measurement.remove();
-      naturalWidth = Math.max(BUBBLE_MIN_WIDTH, Math.ceil((measuredWidth + BUBBLE_OUTER_CHROME_PX + BUBBLE_NATURAL_WIDTH_BUFFER_PX) * BUBBLE_EDITOR_SCALE));
+      naturalWidth = Math.max(BUBBLE_MIN_WIDTH, Math.ceil((measuredWidth + bubbleOuterChromePx + bubbleNaturalWidthBufferPx) * bubbleEditorScale));
       onNaturalWidthChange(naturalWidth);
     }
     const maxAvailableBubbleWidth = Math.max(1, CANVAS_WIDTH - elementX);
@@ -2690,7 +3100,7 @@ function CanvasElement({
       const elementRect = elementRef.current?.getBoundingClientRect();
       const outerChrome = (elementRect?.width ?? contentRect.width) - contentRect.width;
       const targetContentWidth = firstInputWidth !== null
-        ? firstInputWidth / BUBBLE_EDITOR_SCALE - outerChrome
+        ? firstInputWidth / bubbleEditorScale - outerChrome
         : contentRect.width;
       measurement.style.width = `${Math.max(1, targetContentWidth)}px`;
       measurement.style.height = "auto";
@@ -2699,6 +3109,7 @@ function CanvasElement({
       measurement.style.overflow = "visible";
       measurement.style.visibility = "hidden";
       measurement.style.pointerEvents = "none";
+      measurement.style.setProperty("--ab-content-scale", String(canvasScale));
       document.body.appendChild(measurement);
       contentHeight = measurement.getBoundingClientRect().height;
       measurement.remove();
@@ -2711,7 +3122,7 @@ function CanvasElement({
     if (autoHeightResizeActive) lastMeasuredWidthRef.current = element.width;
 
     const nextHeight = isBubbleElement
-      ? Math.max(BUBBLE_MIN_HEIGHT, Math.ceil((contentHeight + BUBBLE_OUTER_CHROME_PX) * BUBBLE_EDITOR_SCALE))
+      ? Math.max(BUBBLE_MIN_HEIGHT, Math.ceil((contentHeight + bubbleOuterChromePx) * bubbleEditorScale))
       : Math.max(54, Math.ceil(contentHeight * (CANVAS_HEIGHT / canvasHeight)));
     const sizePatch: ElementGeometryPatch = {};
     if (isBubbleElement && bubbleContentChanged && bubbleWidthMode === "auto" && editableElementContent.trim() && naturalWidth !== null) {
@@ -2732,6 +3143,10 @@ function CanvasElement({
     bubbleWidthMode,
     elementX,
     isBodyText,
+    bubbleEditorScale,
+    bubbleNaturalWidthBufferPx,
+    bubbleOuterChromePx,
+    canvasScale,
     onAutoSizeChange,
     onNaturalWidthChange,
   ]);
@@ -2799,10 +3214,14 @@ function CanvasElement({
       }
     },
   };
-  const textStyle = element.type === "text" ? getCanvasTextStyle(element, isBodyText) : undefined;
+  const textStyle = element.type === "text" ? getCanvasTextStyle(element, isBodyText, canvasScale) : undefined;
+  const elementStyle = {
+    ...positionStyle,
+    "--ab-content-scale": canvasScale,
+  } as unknown as React.CSSProperties;
   const baseProps = {
     className: `ab-canvas-element ab-canvas-element--${element.type}${selected ? " is-selected" : ""}`,
-    style: positionStyle,
+    style: elementStyle,
     onClick: (event: React.MouseEvent) => {
       event.stopPropagation();
       const target = event.target as HTMLElement;
@@ -2837,6 +3256,29 @@ function CanvasElement({
       if (!start) return;
       if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) pointerMovedRef.current = true;
     },
+    onContextMenu: (event: React.MouseEvent<HTMLElement>) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("input,textarea,select,[contenteditable='true'],[role='textbox']")) return;
+      const handled = onRequestContextMenu?.(
+        { x: event.clientX, y: event.clientY },
+        elementRef.current,
+      ) ?? false;
+      if (!handled) return;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+      const isContextMenuKey = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+      if (!isContextMenuKey) return;
+      const rect = elementRef.current?.getBoundingClientRect();
+      const handled = onRequestContextMenu?.(
+        { x: rect?.left ?? 0, y: rect?.bottom ?? 0 },
+        elementRef.current,
+      ) ?? false;
+      if (!handled) return;
+      event.preventDefault();
+      event.stopPropagation();
+    },
     tabIndex: 0,
     role: "button" as const,
     "aria-label": `${getElementLabel(element.type)}：${elementName(element)}`,
@@ -2861,6 +3303,7 @@ function CanvasElement({
           <AnnotatedTextContent
             element={element}
             isBodyText={isBodyText}
+            canvasScale={canvasScale}
             annotations={annotations ?? element.annotations}
             onRequestDelete={onRequestDeleteAnnotation}
             onSelectAnnotation={onSelectAnnotation}
@@ -2899,8 +3342,8 @@ function CanvasElement({
           </div>
         </>
       )}
-      {element.type === "question" && <QuestionCanvas element={element} />}
-      {element.type === "interaction" && <InteractionCanvas element={element} />}
+      {element.type === "question" && <QuestionCanvas element={element} canvasScale={canvasScale} />}
+      {element.type === "interaction" && <InteractionCanvas element={element} canvasScale={canvasScale} />}
       {element.type === "bubble" && (
         <>
           <div
@@ -2946,7 +3389,6 @@ function CanvasElement({
                 aria-label="调整气泡指向"
                 aria-valuemin={0}
                 aria-valuemax={359}
-                aria-valuestep={1}
                 aria-valuenow={Math.round(tailAngle) % 360}
                 aria-valuetext={`${Math.round(tailAngle)}°，顺时针方向`}
                 tabIndex={selected ? 0 : -1}
@@ -2971,10 +3413,10 @@ function CanvasElement({
   );
 }
 
-function InteractionCanvas({ element }: { element: InteractionElement }) {
+function InteractionCanvas({ element, canvasScale }: { element: InteractionElement; canvasScale: number }) {
   const characters = Array.from(element.title.trim());
   return (
-    <div className="ab-interaction-canvas" aria-label="投票互动画布预览">
+    <div className="ab-interaction-canvas" aria-label="投票互动画布预览" style={{ "--ab-content-scale": canvasScale } as React.CSSProperties}>
       <div className="ab-interaction-title">
         <div className="ab-interaction-title-line">
           <img src={new URL("./assets/f3183aca-3189-409f-b5b6-7e67b1ee3c9a.svg", import.meta.url).href} width={13.333} height={13.333} alt="标题语音" />
@@ -2990,9 +3432,9 @@ function InteractionCanvas({ element }: { element: InteractionElement }) {
   );
 }
 
-function QuestionCanvas({ element }: { element: QuestionElement }) {
+function QuestionCanvas({ element, canvasScale }: { element: QuestionElement; canvasScale: number }) {
   return (
-    <div className="ab-question-canvas-card" aria-label="题目画布预览">
+    <div className="ab-question-canvas-card" aria-label="题目画布预览" style={{ "--ab-content-scale": canvasScale } as React.CSSProperties}>
       <div className="ab-question-canvas-stem">
         <FileAudio size={13} aria-hidden="true" />
         <span className={element.stem.trim() ? "is-filled" : ""}>{element.stem.trim() || "暂无内容"}</span>
@@ -3013,19 +3455,21 @@ function QuestionCanvas({ element }: { element: QuestionElement }) {
 function AnnotatedTextContent({
   element,
   isBodyText,
+  canvasScale,
   annotations,
   onRequestDelete,
   onSelectAnnotation,
 }: {
   element: TextElement;
   isBodyText: boolean;
+  canvasScale: number;
   annotations: TextAnnotation[];
   onRequestDelete?: (annotationId: string) => void;
   onSelectAnnotation?: (annotationId: string) => void;
 }) {
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
   const segments = buildAnnotationSegments(element.content, annotations);
-  const style = getCanvasTextStyle(element, isBodyText);
+  const style = getCanvasTextStyle(element, isBodyText, canvasScale);
   const paragraphs = segments.reduce<typeof segments[]>((result, segment) => {
     const parts = segment.text.split("\n");
     let partStart = segment.start;
@@ -3612,6 +4056,7 @@ function LayersPanel({
   onReorder,
   onToggleVisibility,
   onOpenRequirement,
+  onRequestContextMenu,
 }: {
   elements: BookElement[];
   selectedId: string | null;
@@ -3620,6 +4065,7 @@ function LayersPanel({
   onReorder: (id: string, targetId: string, position: LayerDropPosition) => void;
   onToggleVisibility: (id: string) => void;
   onOpenRequirement: (element: BookElement) => void;
+  onRequestContextMenu?: (id: string, position: { x: number; y: number }, trigger: HTMLElement | null) => boolean;
 }) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; position: LayerDropPosition } | null>(null);
@@ -3678,6 +4124,7 @@ function LayersPanel({
         {elements.map((element, index) => {
           const hidden = element.hidden === true;
           const typeLabel = getLayerTypeLabel(element.type);
+          const displayName = getLayerElementName(element, elements);
           const isDropBefore = dropTarget?.id === element.id && dropTarget.position === "before";
           const isDropAfter = dropTarget?.id === element.id && dropTarget.position === "after";
           return (
@@ -3685,16 +4132,40 @@ function LayersPanel({
               key={element.id}
               className={`ab-canvas-layer-row${selectedId === element.id ? " is-selected" : ""}${hidden ? " is-hidden" : ""}${draggedId === element.id ? " is-dragging" : ""}${isDropBefore ? " is-drop-before" : ""}${isDropAfter ? " is-drop-after" : ""}`}
               role="listitem"
+              tabIndex={-1}
               data-layer-id={element.id}
               aria-posinset={index + 1}
               aria-setsize={elements.length}
               onClick={() => onSelect(element.id)}
+              onContextMenu={(event) => {
+                const handled = onRequestContextMenu?.(
+                  element.id,
+                  { x: event.clientX, y: event.clientY },
+                  event.currentTarget,
+                ) ?? false;
+                if (!handled) return;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onKeyDown={(event) => {
+                const isContextMenuKey = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+                if (!isContextMenuKey) return;
+                const rect = event.currentTarget.getBoundingClientRect();
+                const handled = onRequestContextMenu?.(
+                  element.id,
+                  { x: rect.left, y: rect.bottom },
+                  event.currentTarget,
+                ) ?? false;
+                if (!handled) return;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
             >
               <span
                 className="ab-canvas-layer-drag"
                 role="button"
                 tabIndex={0}
-                aria-label={`拖动${typeLabel}“${elementName(element)}”，可使用上下方向键调整顺序`}
+                aria-label={`拖动${typeLabel}“${displayName}”，可使用上下方向键调整顺序`}
                 title="拖动调整图层顺序"
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
@@ -3728,7 +4199,7 @@ function LayersPanel({
               <span className={`ab-canvas-layer-icon ab-canvas-layer-icon--${element.type}`} aria-hidden="true">
                 {getLayerTypeIcon(element.type)}
               </span>
-              <span className="ab-canvas-layer-name" title={elementName(element)}>{elementName(element)}</span>
+              <span className="ab-canvas-layer-name" title={displayName}>{displayName}</span>
               {(element.type === "image" || element.type === "motion") && (
                 <button
                   type="button"

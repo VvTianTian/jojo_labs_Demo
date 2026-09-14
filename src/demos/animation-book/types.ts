@@ -145,6 +145,13 @@ export interface ProductionRequirement {
 export interface PlaybackOrderItem {
   elementId: string;
   displayMode: PlaybackDisplayMode;
+  /** A single playback hierarchy level; nested groups are intentionally unsupported. */
+  children?: PlaybackOrderChild[];
+}
+
+export interface PlaybackOrderChild {
+  elementId: string;
+  displayMode: PlaybackDisplayMode;
 }
 
 export interface AnimationBookPage {
