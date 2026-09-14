@@ -47,6 +47,7 @@ export const normalizeAnimationBook = (book: AnimationBook): AnimationBook => {
 
   return {
     ...book,
+    coverAudio: book.coverAudio ?? null,
     cover: normalizePage(book.cover),
     pages: book.pages.map(normalizePage),
   };
@@ -64,7 +65,6 @@ const createEmptyPage = (
   elements: [],
   appearanceOrder: [],
   playbackOrder: [],
-  requirements: [],
 });
 
 const coverTextSlots: { field: CoverTextField; id: string; y: number }[] = [
@@ -74,7 +74,7 @@ const coverTextSlots: { field: CoverTextField; id: string; y: number }[] = [
   { field: "fiction", id: "cover-fiction", y: 672 },
 ];
 
-// Empty content retains the fixed cover template and its production bindings.
+// Empty content retains the fixed cover template and direct media controls.
 const createEmptyCover = (): AnimationBookPage => ({
   ...createEmptyPage("cover", "封面", "cover"),
   elements: [
@@ -89,11 +89,6 @@ const createEmptyCover = (): AnimationBookPage => ({
       audioUrl: null, voiceSupplement: "", annotations: [],
     })),
   ],
-  requirements: [
-    { id: "cover-image-brief", type: "image", title: "封面图片需求", target: { kind: "element", elementId: "cover-image" } },
-    { id: "cover-motion-brief", type: "motion", title: "封面动效需求", target: { kind: "element", elementId: "cover-motion" } },
-    { id: "cover-audio-brief", type: "audio", title: "封面语音", target: null },
-  ].map((slot) => ({ ...slot, brief: { html: "", text: "" }, asset: null, status: "pending" })) as AnimationBookPage["requirements"],
 });
 
 export const initialAnimationBook: AnimationBook = {
@@ -102,6 +97,7 @@ export const initialAnimationBook: AnimationBook = {
   language: "zh",
   coverLayout: "split",
   cover: createEmptyCover(),
+  coverAudio: null,
   pages: [
     createEmptyPage("page-1", "正文 1", "page"),
   ],

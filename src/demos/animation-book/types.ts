@@ -3,8 +3,6 @@ export type CoverLayout = "split" | "fullscreen";
 export type CoverTextField = "title" | "topic" | "wordCount" | "fiction";
 export type UserRole = "research" | "production";
 export type ElementType = "text" | "image" | "motion" | "bubble" | "question" | "interaction";
-export type RequirementType = "image" | "motion" | "audio";
-export type RequirementStatus = "pending" | "uploaded" | "failed";
 export type BubbleWidthMode = "auto" | "manual";
 export type TextAlign = "left" | "center" | "right" | "justify";
 export type TextAnnotationType = "word" | "sentence" | "note";
@@ -115,31 +113,11 @@ export type BookElement = TextElement | ImageElement | MotionElement | BubbleEle
 export const participatesInPlayback = (element: BookElement): boolean =>
   element.type === "text" || element.type === "motion" || element.type === "bubble";
 
-export interface RichTextDocument {
-  html: string;
-  text: string;
-}
-
-export type RequirementTarget =
-  { kind: "element"; elementId: string };
-
-export interface ProductionAsset {
+export interface MediaAsset {
   url: string;
   fileName: string;
   mimeType: string;
   uploadedAt: string;
-}
-
-export interface ProductionRequirement {
-  id: string;
-  type: RequirementType;
-  title: string;
-  brief: RichTextDocument;
-  target: RequirementTarget | null;
-  asset: ProductionAsset | null;
-  status: RequirementStatus;
-  errorMessage?: string;
-  supplementalBrief?: RichTextDocument;
 }
 
 export interface PlaybackOrderItem {
@@ -162,7 +140,6 @@ export interface AnimationBookPage {
   elements: BookElement[];
   appearanceOrder: string[];
   playbackOrder: PlaybackOrderItem[];
-  requirements: ProductionRequirement[];
 }
 
 export interface AnimationBook {
@@ -171,6 +148,7 @@ export interface AnimationBook {
   language: BookLanguage;
   coverLayout: CoverLayout;
   cover: AnimationBookPage;
+  coverAudio: MediaAsset | null;
   pages: AnimationBookPage[];
 }
 
