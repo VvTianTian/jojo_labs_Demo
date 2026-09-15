@@ -12,6 +12,7 @@ import {
   Bold,
   Check,
   ChevronDown,
+  ChevronUp,
   CircleX,
   Eye,
   EyeOff,
@@ -59,6 +60,7 @@ import {
   type TextSelectionRange,
   writePlainTextToContentEditable,
 } from "./annotation-utils";
+import { RequirementRichText, RichTextPreview } from "./components/RequirementRichText";
 import { TextAnnotationPanel, type AnnotationPanelTab, type VoiceItem } from "./components/TextAnnotationPanel";
 import {
   groupPlaybackOrderItems,
@@ -86,6 +88,7 @@ import {
   type ImageElement,
   type MediaAsset,
   type MotionElement,
+  type ProductionRequirement,
   type PlaybackDisplayMode,
   type PlaybackOrderItem,
   type InteractionElement,
@@ -102,6 +105,8 @@ import "./animation-book.css";
 type ViewId = "cover" | string;
 type PanelTab = AnnotationPanelTab;
 const getDefaultPanelTab = (): PanelTab => "voice";
+type CanvasRequirementMode = "editing" | "preview";
+type CanvasRequirementModes = Record<string, CanvasRequirementMode>;
 type CanvasZoomPreset = "current" | "medium" | "large" | "xlarge";
 type CanvasInteractionMode = "select" | "pan";
 type ResizeCorner = "top-left" | "top-right" | "middle-left" | "middle-right" | "bottom-left" | "bottom-right";
@@ -284,6 +289,37 @@ const replaceElement = (
 
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
+const getVisualRequirement = (
+  page: AnimationBookPage | undefined,
+  element: ImageElement | MotionElement,
+) => page?.requirements.find(
+  (requirement) =>
+    requirement.type === element.type &&
+    requirement.target?.kind === "element" &&
+    requirement.target.elementId === element.id,
+);
+
+const createVisualRequirement = (element: ImageElement | MotionElement): ProductionRequirement => ({
+  id: createId(`${element.type}-requirement`),
+  type: element.type,
+  title: element.type === "image" ? "图片制作需求" : "动效制作需求",
+  brief: { html: "", text: "" },
+  target: { kind: "element", elementId: element.id },
+});
+
+const getDefaultCanvasRequirementModes = (
+  page: AnimationBookPage | undefined,
+): CanvasRequirementModes =>
+  Object.fromEntries(
+    (page?.requirements ?? [])
+      .filter((requirement) => {
+        const targetElement = page?.elements.find((element) => element.id === requirement.target?.elementId);
+        if (!targetElement || (targetElement.type !== "image" && targetElement.type !== "motion")) return false;
+        return targetElement.type === requirement.type && !targetElement.src;
+      })
+      .map((requirement) => [requirement.id, "preview" as const]),
+  );
+
 const readFileAsDataUrl = (file: File, onReady: (dataUrl: string) => void, onError?: () => void) => {
   const reader = new FileReader();
   reader.onload = () => onReady(reader.result as string);
@@ -463,6 +499,9 @@ export function AnimationBookEditor() {
   const [role, setRole] = useState<UserRole>("research");
   const [viewId, setViewId] = useState<ViewId>("page-1");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [canvasRequirementModes, setCanvasRequirementModes] = useState<CanvasRequirementModes>(() =>
+    getDefaultCanvasRequirementModes(initialAnimationBook.pages[0]),
+  );
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [panelTab, setPanelTab] = useState<PanelTab>(() => getDefaultPanelTab());
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
@@ -634,6 +673,7 @@ export function AnimationBookEditor() {
     const nextVisibleElement = nextPage?.elements.find((element) => element.hidden !== true) ?? nextPage?.elements[0];
     setViewId(nextViewId);
     setSelectedId(nextVisibleElement?.id ?? null);
+    setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage));
     setEditingTextId(null);
     setPendingDelete(null);
     setPendingPageDelete(null);
@@ -658,6 +698,7 @@ export function AnimationBookEditor() {
     setIsCanvasPanning(false);
     setRole(nextRole);
     setPanelTab(getDefaultPanelTab());
+    setCanvasRequirementModes(getDefaultCanvasRequirementModes(currentPage));
     setEditingTextId(null);
     setPendingDelete(null);
     setPendingPageDelete(null);
@@ -679,7 +720,47 @@ export function AnimationBookEditor() {
     setBook((previous) => updatePage(previous, viewId, updater));
   };
 
+  const setCanvasRequirementMode = (requirementId: string, mode: CanvasRequirementMode | null) => {
+    setCanvasRequirementModes((current) => {
+      const next = { ...current };
+      if (mode === null) {
+        delete next[requirementId];
+        return next;
+      }
+      if (mode === "editing") {
+        Object.keys(next).forEach((id) => {
+          if (id !== requirementId && next[id] === "editing") next[id] = "preview";
+        });
+      }
+      next[requirementId] = mode;
+      return next;
+    });
+  };
+
+  const finishActiveCanvasRequirementEdit = () => {
+    const editingRequirementId = Object.entries(canvasRequirementModes)
+      .find(([, mode]) => mode === "editing")?.[0];
+    if (editingRequirementId) setCanvasRequirementMode(editingRequirementId, "preview");
+  };
+
+  useEffect(() => {
+    if (!Object.values(canvasRequirementModes).includes("editing")) return undefined;
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".ab-canvas-requirement.is-editing")) return;
+      setCanvasRequirementModes((current) => {
+        const editingRequirementId = Object.entries(current)
+          .find(([, mode]) => mode === "editing")?.[0];
+        if (!editingRequirementId) return current;
+        return { ...current, [editingRequirementId]: "preview" };
+      });
+    };
+    document.addEventListener("pointerdown", handleDocumentPointerDown);
+    return () => document.removeEventListener("pointerdown", handleDocumentPointerDown);
+  }, [canvasRequirementModes]);
+
   const selectElement = (elementId: string) => {
+    finishActiveCanvasRequirementEdit();
     setSelectedId(elementId);
     const nextElement = currentPage?.elements.find((element) => element.id === elementId);
     if ((nextElement?.type === "question" || nextElement?.type === "interaction")) setPanelTab("question");
@@ -687,6 +768,35 @@ export function AnimationBookEditor() {
       setTextSelection(null);
       setSelectedAnnotationId(null);
     }
+  };
+
+  const toggleElementRequirement = (element: BookElement) => {
+    if (element.type !== "image" && element.type !== "motion") return;
+    const currentRequirement = getVisualRequirement(currentPage, element);
+    const requirement = currentRequirement ?? createVisualRequirement(element);
+    if (!currentRequirement) {
+      modifyCurrentPage((page) => ({
+        ...page,
+        requirements: [...page.requirements, requirement],
+      }));
+    }
+    setSelectedId(element.id);
+    const currentMode = canvasRequirementModes[requirement.id];
+    setCanvasRequirementMode(requirement.id, currentMode ? null : "preview");
+  };
+
+  const updateCanvasRequirement = (requirementId: string, brief: ProductionRequirement["brief"]) => {
+    if (!isResearch) return;
+    modifyCurrentPage((page) => ({
+      ...page,
+      requirements: page.requirements.map((requirement) =>
+        requirement.id === requirementId ? { ...requirement, brief } : requirement,
+      ),
+    }));
+  };
+
+  const finishCanvasRequirementEdit = (requirementId: string) => {
+    setCanvasRequirementMode(requirementId, "preview");
   };
 
   const requestElementContextMenu = (
@@ -912,10 +1022,16 @@ export function AnimationBookEditor() {
   const addElement = (element: BookElement) => {
     if (!isResearch || currentPage.kind === "cover") return;
     const elementToAdd = { ...element, hidden: element.hidden === true };
+    const visualRequirement = elementToAdd.type === "image" || elementToAdd.type === "motion"
+      ? createVisualRequirement(elementToAdd)
+      : null;
     modifyCurrentPage((page) => ({
       ...page,
       elements: [...page.elements, elementToAdd],
       appearanceOrder: [...page.appearanceOrder, elementToAdd.id],
+      requirements: visualRequirement
+        ? [...page.requirements, visualRequirement]
+        : page.requirements,
       playbackOrder: page.kind === "page" && participatesInPlayback(elementToAdd)
         ? [...normalizePlaybackOrder(page), {
             elementId: elementToAdd.id,
@@ -925,6 +1041,7 @@ export function AnimationBookEditor() {
     }));
     setSelectedId(elementToAdd.id);
     setEditingTextId(elementToAdd.type === "text" ? elementToAdd.id : null);
+    if (visualRequirement) setCanvasRequirementMode(visualRequirement.id, "preview");
     setSelectedAnnotationId(null);
     setTextSelection(null);
     if (elementToAdd.type === "text" || elementToAdd.type === "bubble") setPanelTab("voice");
@@ -1130,9 +1247,11 @@ export function AnimationBookEditor() {
             ? { ...element, src: url, alt: file.name }
             : element.type === "motion"
               ? { ...element, src: url, fileName: file.name }
-              : element;
+          : element;
         }),
       }));
+      const requirement = getVisualRequirement(currentPage, mediaElement);
+      if (requirement) setCanvasRequirementMode(requirement.id, null);
       notify(`${mediaElement.type === "image" ? "图片" : "动效"}已上传`);
     }, () => notify("文件读取失败，请重试"));
   };
@@ -1165,9 +1284,11 @@ export function AnimationBookEditor() {
             ? { ...element, src: url, alt: file.name }
             : element.type === "motion"
               ? { ...element, src: url, fileName: file.name }
-              : element;
+          : element;
         }),
       }));
+      const requirement = getVisualRequirement(currentPage, mediaElement);
+      if (requirement) setCanvasRequirementMode(requirement.id, null);
       notify(`${mediaElement.type === "image" ? "图片" : "动效"}已上传`);
     }, () => notify("文件读取失败，请重试"));
   };
@@ -1192,11 +1313,14 @@ export function AnimationBookEditor() {
 
   const clearImageAsset = (elementId: string) => {
     if (isResearch) return;
+    const imageElement = currentPage?.elements.find(
+      (element): element is ImageElement => element.id === elementId && element.type === "image",
+    );
     modifyCurrentPage((page) => {
-      const imageElement = page.elements.find(
+      const pageImageElement = page.elements.find(
         (element): element is ImageElement => element.id === elementId && element.type === "image",
       );
-      if (!imageElement) return page;
+      if (!pageImageElement) return page;
       return {
         ...page,
         elements: page.elements.map((element) =>
@@ -1207,16 +1331,23 @@ export function AnimationBookEditor() {
       };
     });
     setSelectedId(elementId);
+    if (imageElement) {
+      const requirement = getVisualRequirement(currentPage, imageElement);
+      if (requirement) setCanvasRequirementMode(requirement.id, "preview");
+    }
     notify("图片已删除，可重新上传");
   };
 
   const clearMotionAsset = (elementId: string) => {
     if (isResearch) return;
+    const motionElement = currentPage?.elements.find(
+      (element): element is MotionElement => element.id === elementId && element.type === "motion",
+    );
     modifyCurrentPage((page) => {
-      const motionElement = page.elements.find(
+      const pageMotionElement = page.elements.find(
         (element): element is MotionElement => element.id === elementId && element.type === "motion",
       );
-      if (!motionElement) return page;
+      if (!pageMotionElement) return page;
       return {
         ...page,
         elements: page.elements.map((element) =>
@@ -1227,20 +1358,29 @@ export function AnimationBookEditor() {
       };
     });
     setSelectedId(elementId);
+    if (motionElement) {
+      const requirement = getVisualRequirement(currentPage, motionElement);
+      if (requirement) setCanvasRequirementMode(requirement.id, "preview");
+    }
     notify("动效已删除，可重新上传");
   };
 
   const removeElement = (elementId: string) => {
     if (!isResearch || currentPage.kind === "cover") return;
     const removedElement = currentPage?.elements.find((element) => element.id === elementId);
+    const removedRequirementId = currentPage?.requirements.find(
+      (requirement) => requirement.target?.elementId === elementId,
+    )?.id;
     modifyCurrentPage((page) => ({
       ...page,
       elements: page.elements.filter((element) => element.id !== elementId),
       appearanceOrder: page.appearanceOrder.filter((id) => id !== elementId),
       playbackOrder: removePlaybackElementFromOrder(normalizePlaybackOrder(page), elementId),
+      requirements: page.requirements.filter((requirement) => requirement.target?.elementId !== elementId),
     }));
     setSelectedId(null);
     setEditingTextId(null);
+    if (removedRequirementId) setCanvasRequirementMode(removedRequirementId, null);
     setSelectedAnnotationId(null);
     setTextSelection(null);
     setPendingDelete(null);
@@ -1279,6 +1419,7 @@ export function AnimationBookEditor() {
       elements: [],
       appearanceOrder: [],
       playbackOrder: [],
+      requirements: [],
     };
     newPage.appearanceOrder = newPage.elements.map((element) => element.id);
     newPage.playbackOrder = createPlaybackOrder(newPage.elements);
@@ -1288,6 +1429,7 @@ export function AnimationBookEditor() {
     setSelectedAnnotationId(null);
     setTextSelection(null);
     setSelectedId(null);
+    setCanvasRequirementModes({});
     setEditingTextId(null);
     notify("已添加新页面");
   };
@@ -1313,6 +1455,7 @@ export function AnimationBookEditor() {
       setPanelTab(getDefaultPanelTab());
       setViewId(nextPage?.id ?? "cover");
       setSelectedId(nextPage?.elements[0]?.id ?? null);
+      setCanvasRequirementModes(getDefaultCanvasRequirementModes(nextPage));
       setEditingTextId(null);
       setSelectedAnnotationId(null);
       setTextSelection(null);
@@ -1617,9 +1760,13 @@ export function AnimationBookEditor() {
     const element = currentPage?.elements.find((candidate) => candidate.id === elementId);
     if (!element) return;
     const hidden = element.hidden !== true;
+    const visualRequirement = element.type === "image" || element.type === "motion"
+      ? getVisualRequirement(currentPage, element)
+      : undefined;
     modifyCurrentPage((page) => replaceElement(page, elementId, (candidate) => ({ ...candidate, hidden })));
     if (hidden && selectedId === elementId) {
       setEditingTextId(null);
+      if (visualRequirement) setCanvasRequirementMode(visualRequirement.id, null);
       setTextSelection(null);
     }
   };
@@ -1724,6 +1871,15 @@ export function AnimationBookEditor() {
         setPendingAnnotationDelete(null);
       } else if (pendingDelete) {
         setPendingDelete(null);
+      } else if (selectedElement && (selectedElement.type === "image" || selectedElement.type === "motion")) {
+        const selectedVisualRequirement = getVisualRequirement(currentPage, selectedElement);
+        if (selectedVisualRequirement && canvasRequirementModes[selectedVisualRequirement.id]) {
+          setCanvasRequirementMode(selectedVisualRequirement.id, null);
+        } else if (editingTextId) {
+          setEditingTextId(null);
+        } else {
+          setSelectedId(null);
+        }
       } else if (editingTextId) {
         setEditingTextId(null);
       } else {
@@ -1972,11 +2128,16 @@ export function AnimationBookEditor() {
                   onKeyDown={handleCanvasKeyDown}
                   tabIndex={canvasInteractionMode === "pan" ? 0 : -1}
                   aria-label="动画书画布视口"
+                  onPointerDown={(event) => {
+                    if ((event.target as HTMLElement).closest(".ab-canvas-requirement")) return;
+                    finishActiveCanvasRequirementEdit();
+                  }}
                   onClick={() => {
                     if (canvasInteractionMode === "pan" || canvasPanMovedRef.current) {
                       canvasPanMovedRef.current = false;
                       return;
                     }
+                    finishActiveCanvasRequirementEdit();
                     setSelectedId(null);
                     setEditingTextId(null);
                     setTextSelection(null);
@@ -1989,6 +2150,12 @@ export function AnimationBookEditor() {
                   {showSafeArea && <SafeAreaOverlay />}
                   {sortedElements.map((element) => {
                     const isVisualElement = element.type === "image" || element.type === "motion";
+                    const elementRequirement = isVisualElement
+                      ? getVisualRequirement(currentPage, element)
+                      : undefined;
+                    const requirementMode = elementRequirement
+                      ? canvasRequirementModes[elementRequirement.id]
+                      : undefined;
                     return (
                       <Fragment key={element.id}>
                         {currentPage.kind === "cover" && element.type === "text" && element.coverField ? (
@@ -2016,7 +2183,24 @@ export function AnimationBookEditor() {
                             onRequestUpload={() => requestCoverMediaUpload(element.id)}
                             onDelete={() => element.type === "image" ? clearImageAsset(element.id) : clearMotionAsset(element.id)}
                             onChangeMedia={changeCoverMedia}
-                          />
+                          >
+                            <CanvasRequirement
+                              elementType={element.type}
+                              requirement={elementRequirement}
+                              mode={requirementMode}
+                              canEdit={isResearch}
+                              onToggle={() => toggleElementRequirement(element)}
+                              onChange={(brief) => {
+                                if (elementRequirement) updateCanvasRequirement(elementRequirement.id, brief);
+                              }}
+                              onEdit={() => {
+                                if (elementRequirement && isResearch) setCanvasRequirementMode(elementRequirement.id, "editing");
+                              }}
+                              onFinishEditing={() => {
+                                if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
+                              }}
+                            />
+                          </CoverMediaElement>
                         ) : isVisualElement ? (
                           <div
                             className="ab-canvas-visual-group"
@@ -2052,6 +2236,24 @@ export function AnimationBookEditor() {
                               onPointerDown={(event, mode, corner) => beginPointerDrag(event, element, mode, corner)}
                               onRequestContextMenu={(position, trigger) => requestElementContextMenu(element.id, position, trigger)}
                             />
+                            <div className="ab-canvas-requirement-layer">
+                              <CanvasRequirement
+                                elementType={element.type}
+                                requirement={elementRequirement}
+                                mode={requirementMode}
+                                canEdit={isResearch}
+                                onToggle={() => toggleElementRequirement(element)}
+                                onChange={(brief) => {
+                                  if (elementRequirement) updateCanvasRequirement(elementRequirement.id, brief);
+                                }}
+                                onEdit={() => {
+                                  if (elementRequirement && isResearch) setCanvasRequirementMode(elementRequirement.id, "editing");
+                                }}
+                                onFinishEditing={() => {
+                                  if (elementRequirement) finishCanvasRequirementEdit(elementRequirement.id);
+                                }}
+                              />
+                            </div>
                           </div>
                         ) : (
                           <CanvasElement
@@ -3373,6 +3575,90 @@ function AnnotatedTextContent({
   );
 }
 
+function CanvasRequirement({
+  elementType,
+  requirement,
+  mode,
+  canEdit,
+  onToggle,
+  onChange,
+  onEdit,
+  onFinishEditing,
+}: {
+  elementType: "image" | "motion";
+  requirement?: ProductionRequirement;
+  mode?: CanvasRequirementMode;
+  canEdit: boolean;
+  onToggle: () => void;
+  onChange: (brief: ProductionRequirement["brief"]) => void;
+  onEdit: () => void;
+  onFinishEditing: () => void;
+}) {
+  const brief = requirement?.brief ?? { html: "", text: "" };
+  const isEditing = canEdit && mode === "editing";
+  const hasBrief = Boolean(brief.text.trim() || /<img\b/i.test(brief.html));
+
+  return (
+    <div
+      className={`ab-canvas-requirement ab-canvas-requirement--${elementType}${mode ? ` is-${mode}` : ""}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onBlur={(event) => {
+        if (!isEditing) return;
+        const nextTarget = event.relatedTarget as Node | null;
+        if (!nextTarget || !event.currentTarget.contains(nextTarget)) onFinishEditing();
+      }}
+    >
+      <button
+        type="button"
+        className="ab-canvas-requirement-toggle"
+        aria-expanded={Boolean(mode)}
+        aria-label={`${elementType === "image" ? "图片" : "动效"}需求`}
+        onPointerDown={(event) => event.preventDefault()}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onToggle}
+      >
+        <span>需求</span>
+        {mode ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
+      </button>
+      {isEditing ? (
+        <RequirementRichText
+          value={brief}
+          onChange={onChange}
+          className="ab-rich-text-editor--canvas"
+          placeholder={elementType === "image" ? "输入图片需求..." : "输入动效需求..."}
+          autoFocus
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onFinishEditing();
+          }}
+        />
+      ) : mode === "preview" ? (
+        <div
+          className={`ab-canvas-requirement-preview${canEdit ? " ab-canvas-requirement-preview--interactive" : ""}`}
+          role={canEdit ? "button" : undefined}
+          tabIndex={canEdit ? 0 : undefined}
+          aria-label={canEdit ? `编辑${elementType === "image" ? "图片" : "动效"}需求` : undefined}
+          onKeyDown={(event) => {
+            if (!canEdit || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            event.currentTarget.blur();
+            onEdit();
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (canEdit) onEdit();
+          }}
+        >
+          {hasBrief ? <RichTextPreview value={brief} /> : <span className="ab-canvas-requirement-empty">未填写需求</span>}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TextFormatToolbar({
   element,
   onUpdate,
@@ -3547,6 +3833,7 @@ function CoverTextSlot({
 }
 
 function CoverMediaElement({
+  children,
   element,
   layout,
   selected,
@@ -3557,6 +3844,7 @@ function CoverMediaElement({
   onChangeMedia,
 }: {
   element: ImageElement | MotionElement;
+  children: React.ReactNode;
   layout: CoverLayout;
   selected: boolean;
   research: boolean;
@@ -3638,6 +3926,7 @@ function CoverMediaElement({
       }}
     >
       <div className="ab-cover-media-surface">{media}</div>
+      <div className="ab-canvas-requirement-layer">{children}</div>
       <div className={`ab-cover-media-tag ab-cover-media-tag--${mediaType}`}>
         {layout === "fullscreen" ? (
           <button

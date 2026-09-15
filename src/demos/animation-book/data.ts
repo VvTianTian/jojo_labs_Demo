@@ -1,5 +1,5 @@
 import { normalizePlaybackOrderItems } from "./playbackOrderUtils";
-import type { AnimationBook, AnimationBookPage, BookElement, CoverTextField, TextElement } from "./types";
+import type { AnimationBook, AnimationBookPage, BookElement, CoverTextField, ProductionRequirement, TextElement } from "./types";
 
 export const BUBBLE_DEFAULT_GEOMETRY = {
   width: 298,
@@ -42,6 +42,9 @@ export const normalizeAnimationBook = (book: AnimationBook): AnimationBook => {
       ...page,
       elements,
       playbackOrder: normalizePlaybackOrderItems(page.playbackOrder, elements),
+      requirements: (page.requirements ?? []).filter(
+        (requirement) => requirement.type === "image" || requirement.type === "motion",
+      ),
     };
   };
 
@@ -65,6 +68,7 @@ const createEmptyPage = (
   elements: [],
   appearanceOrder: [],
   playbackOrder: [],
+  requirements: [],
 });
 
 const coverTextSlots: { field: CoverTextField; id: string; y: number }[] = [
@@ -74,7 +78,24 @@ const coverTextSlots: { field: CoverTextField; id: string; y: number }[] = [
   { field: "fiction", id: "cover-fiction", y: 672 },
 ];
 
-// Empty content retains the fixed cover template and direct media controls.
+const coverVisualRequirements: ProductionRequirement[] = [
+  {
+    id: "cover-image-brief",
+    type: "image",
+    title: "封面图片需求",
+    brief: { html: "", text: "" },
+    target: { kind: "element", elementId: "cover-image" },
+  },
+  {
+    id: "cover-motion-brief",
+    type: "motion",
+    title: "封面动效需求",
+    brief: { html: "", text: "" },
+    target: { kind: "element", elementId: "cover-motion" },
+  },
+];
+
+// Empty content retains the fixed cover template and canvas visual briefs.
 const createEmptyCover = (): AnimationBookPage => ({
   ...createEmptyPage("cover", "封面", "cover"),
   elements: [
@@ -89,6 +110,7 @@ const createEmptyCover = (): AnimationBookPage => ({
       audioUrl: null, voiceSupplement: "", annotations: [],
     })),
   ],
+  requirements: coverVisualRequirements,
 });
 
 export const initialAnimationBook: AnimationBook = {

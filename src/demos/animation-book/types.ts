@@ -3,6 +3,7 @@ export type CoverLayout = "split" | "fullscreen";
 export type CoverTextField = "title" | "topic" | "wordCount" | "fiction";
 export type UserRole = "research" | "production";
 export type ElementType = "text" | "image" | "motion" | "bubble" | "question" | "interaction";
+export type RequirementType = "image" | "motion";
 export type BubbleWidthMode = "auto" | "manual";
 export type TextAlign = "left" | "center" | "right" | "justify";
 export type TextAnnotationType = "word" | "sentence" | "note";
@@ -120,6 +121,25 @@ export interface MediaAsset {
   uploadedAt: string;
 }
 
+export interface RichTextDocument {
+  html: string;
+  text: string;
+}
+
+export type RequirementTarget = {
+  kind: "element";
+  elementId: string;
+};
+
+/** A visual brief stays bound to its image/motion element and is rendered on the canvas. */
+export interface ProductionRequirement {
+  id: string;
+  type: RequirementType;
+  title: string;
+  brief: RichTextDocument;
+  target: RequirementTarget | null;
+}
+
 export interface PlaybackOrderItem {
   elementId: string;
   displayMode: PlaybackDisplayMode;
@@ -140,6 +160,7 @@ export interface AnimationBookPage {
   elements: BookElement[];
   appearanceOrder: string[];
   playbackOrder: PlaybackOrderItem[];
+  requirements: ProductionRequirement[];
 }
 
 export interface AnimationBook {
