@@ -26,6 +26,7 @@ import {
   Layers3,
   Menu,
   Maximize2,
+  Minimize2,
   MessageCircle,
   MousePointer2,
   Pause,
@@ -107,11 +108,16 @@ type ResizeCorner = "top-left" | "top-right" | "middle-left" | "middle-right" | 
 type ElementGeometryPatch = Partial<Pick<BookElement, "x" | "y" | "width" | "height">> & Partial<Pick<BubbleElement, "widthMode" | "tailAngle">>;
 
 const CANVAS_ZOOM_PRESETS = {
-  current: { width: EDITOR_WIDTH, height: EDITOR_HEIGHT, scale: 1, label: "当前尺寸 640×360" },
-  medium: { width: 800, height: 450, scale: 1.25, label: "800×450" },
-  large: { width: 960, height: 540, scale: 1.5, label: "放大 960×540" },
-  xlarge: { width: 1200, height: 675, scale: 1.875, label: "1200×675" },
+  current: { width: EDITOR_WIDTH, height: EDITOR_HEIGHT, scale: 1, label: "25%", dimensions: "640×360" },
+  medium: { width: 800, height: 450, scale: 1.25, label: "50%", dimensions: "800×450" },
+  large: { width: 960, height: 540, scale: 1.5, label: "75%", dimensions: "960×540" },
+  xlarge: { width: 1200, height: 675, scale: 1.875, label: "100%", dimensions: "1200×675" },
 } as const;
+
+const CANVAS_ZOOM_OPTIONS = Object.entries(CANVAS_ZOOM_PRESETS) as Array<[
+  CanvasZoomPreset,
+  (typeof CANVAS_ZOOM_PRESETS)[CanvasZoomPreset],
+]>;
 
 interface PointerDrag {
   id: string;
@@ -318,6 +324,140 @@ const needsDeleteConfirmation = (element: BookElement) =>
   (element.type === "motion" && Boolean(element.src)) ||
   element.type === "question" || element.type === "interaction";
 
+function CanvasZoomSelect({
+  value,
+  onChange,
+}: {
+  value: CanvasZoomPreset;
+  onChange: (value: CanvasZoomPreset) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const selectedIndex = CANVAS_ZOOM_OPTIONS.findIndex(([optionValue]) => optionValue === value);
+
+  const updateMenuPosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = Math.max(rect.width, 164);
+    const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+    setMenuPosition({
+      top: rect.bottom + 6,
+      left: Math.min(Math.max(8, rect.right - menuWidth), maxLeft),
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!isOpen) return undefined;
+    updateMenuPosition();
+    const focusFrame = window.requestAnimationFrame(() => {
+      optionRefs.current[selectedIndex]?.focus();
+    });
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (rootRef.current && event.target instanceof Node && !rootRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    const closeOnScroll = () => setIsOpen(false);
+    const handleMenuKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsOpen(false);
+        triggerRef.current?.focus();
+        return;
+      }
+      if (event.key === "Tab") {
+        setIsOpen(false);
+        return;
+      }
+      const currentIndex = optionRefs.current.findIndex((option) => option === document.activeElement);
+      if (currentIndex < 0) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        const nextIndex = event.key === "ArrowDown"
+          ? (currentIndex + 1) % CANVAS_ZOOM_OPTIONS.length
+          : event.key === "ArrowUp"
+            ? (currentIndex - 1 + CANVAS_ZOOM_OPTIONS.length) % CANVAS_ZOOM_OPTIONS.length
+            : event.key === "Home"
+              ? 0
+              : CANVAS_ZOOM_OPTIONS.length - 1;
+        optionRefs.current[nextIndex]?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", handleMenuKeyDown);
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", closeOnScroll, true);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", handleMenuKeyDown);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", closeOnScroll, true);
+    };
+  }, [isOpen, selectedIndex]);
+
+  const selectOption = (nextValue: CanvasZoomPreset) => {
+    onChange(nextValue);
+    setIsOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  return (
+    <div ref={rootRef} className="ab-editor-zoom" aria-label="画布缩放">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="ab-editor-zoom-trigger"
+        aria-label="画布缩放"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-controls="ab-editor-zoom-menu"
+        onClick={() => setIsOpen((open) => !open)}
+        onKeyDown={(event) => {
+          if (!isOpen && (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            setIsOpen(true);
+          }
+        }}
+      >
+        <span className="ab-editor-zoom-value">{CANVAS_ZOOM_PRESETS[value].label}</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {isOpen && (
+        <div
+          id="ab-editor-zoom-menu"
+          className="ab-editor-zoom-menu"
+          role="listbox"
+          aria-label="画布缩放选项"
+          style={{ top: menuPosition.top, left: menuPosition.left }}
+        >
+          {CANVAS_ZOOM_OPTIONS.map(([optionValue, preset], index) => (
+            <button
+              key={optionValue}
+              ref={(element) => { optionRefs.current[index] = element; }}
+              type="button"
+              role="option"
+              aria-label={`${preset.label} ${preset.dimensions}`}
+              aria-selected={optionValue === value}
+              tabIndex={optionValue === value ? 0 : -1}
+              className="ab-editor-zoom-option"
+              onClick={() => selectOption(optionValue)}
+            >
+              <span className="ab-editor-zoom-option-percentage">{preset.label}</span>
+              <span className="ab-editor-zoom-option-dimensions">{preset.dimensions}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AnimationBookEditor() {
   const [book, setBook] = useState<AnimationBook>(() => structuredClone(normalizeAnimationBook(initialAnimationBook)));
   const [role, setRole] = useState<UserRole>("research");
@@ -347,6 +487,7 @@ export function AnimationBookEditor() {
   const [showSafeArea, setShowSafeArea] = useState(true);
   const [canvasZoomPreset, setCanvasZoomPreset] = useState<CanvasZoomPreset>("current");
   const [canvasInteractionMode, setCanvasInteractionMode] = useState<CanvasInteractionMode>("select");
+  const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
   const [isCanvasPanning, setIsCanvasPanning] = useState(false);
   const [autoHeightElementId, setAutoHeightElementId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -1605,7 +1746,7 @@ export function AnimationBookEditor() {
     : null;
 
   return (
-    <div className="animation-book-editor" onKeyDown={handleKeyDown}>
+    <div className={`animation-book-editor${isEditorFullscreen ? " is-editor-fullscreen" : ""}`} onKeyDown={handleKeyDown}>
       <div className="ab-window-bar">
         <div className="ab-traffic-lights" aria-hidden="true">
           <span className="ab-traffic-light ab-traffic-light--red" />
@@ -1621,13 +1762,7 @@ export function AnimationBookEditor() {
             <span className="ab-tag ab-tag--blue">进行中</span>
             <span className="ab-tag ab-tag--blue">生产中</span>
             <span className="ab-tag ab-tag--muted">LS_105189</span>
-            <input
-              aria-label="动画书名称"
-              value={book.title}
-              readOnly={!isResearch}
-              onChange={(event) => { if (isResearch) setBook((previous) => ({ ...previous, title: event.target.value })); }}
-              className="ab-project-title-input"
-            />
+            <span className="ab-project-title" aria-label="动画书名称">{book.title}</span>
             <span className="ab-project-note">我是课时备注 - 读一读 - 动画书</span>
             <span className="ab-tag ab-tag--muted">阅读5阶</span>
             <button className="ab-text-button" type="button" onClick={() => notify("更多信息将在后续版本开放")}>更多</button>
@@ -1654,8 +1789,14 @@ export function AnimationBookEditor() {
           <span>动画书生产工具</span>
         </div>
         <div className="ab-toolbar-actions">
-          <button type="button" className="ab-toolbar-button" onClick={() => notify("编辑画布已适配窗口") }>
-            <Maximize2 size={14} /> 全屏
+          <button
+            type="button"
+            className="ab-toolbar-button"
+            aria-pressed={isEditorFullscreen}
+            onClick={() => setIsEditorFullscreen((fullscreen) => !fullscreen)}
+          >
+            {isEditorFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            {isEditorFullscreen ? "取消全屏" : "全屏"}
           </button>
           <button type="button" className="ab-secondary-button" onClick={() => notify("已取消本次演示操作")}>取消</button>
           <button type="button" className="ab-primary-button" onClick={() => notify("已保存到当前 Demo 会话")}>
@@ -1727,13 +1868,15 @@ export function AnimationBookEditor() {
                   <div className="ab-editor-sticky-toolbar">
                     <div className="ab-editor-toolbar" aria-label={isResearch ? "编辑画布工具" : "画布视图工具"}>
                       {isResearch && (
-                        <div className="ab-editor-toolbar-group ab-editor-history" aria-label="编辑历史">
-                          <ToolButton icon={<Undo2 size={18} />} label="撤销" displayLabel="撤销" disabled />
-                          <ToolButton icon={<Redo2 size={18} />} label="重做" displayLabel="重做" disabled />
+                        <div className="ab-editor-toolbar-leading">
+                          <div className="ab-editor-toolbar-group ab-editor-history" aria-label="编辑历史">
+                            <ToolButton icon={<Undo2 size={18} />} label="撤销" displayLabel="撤销" disabled />
+                            <ToolButton icon={<Redo2 size={18} />} label="重做" displayLabel="重做" disabled />
+                          </div>
+                          <span className="ab-tool-divider" />
                         </div>
                       )}
-                      {isResearch && <span className="ab-tool-divider" />}
-                      <div className="ab-editor-toolbar-group">
+                      <div className="ab-editor-toolbar-group ab-editor-toolbar-main">
                         <ToolButton
                           icon={<MousePointer2 size={18} />}
                           label="选择"
@@ -1785,32 +1928,23 @@ export function AnimationBookEditor() {
                           </>
                         ) : null}
                       </div>
-                      <div className="ab-editor-toolbar-settings">
-                        <label className="ab-editor-zoom" aria-label="画布缩放">
-                          <select
-                            aria-label="画布缩放"
-                            value={canvasZoomPreset}
-                            onChange={(event) => setCanvasZoomPreset(event.target.value as CanvasZoomPreset)}
+                      <div className="ab-editor-toolbar-trailing">
+                        <div className="ab-editor-toolbar-settings">
+                          <CanvasZoomSelect value={canvasZoomPreset} onChange={setCanvasZoomPreset} />
+                        </div>
+                        <div className="ab-canvas-grid-toggle ab-editor-toolbar-grid" aria-label="动画书网格系统">
+                          <span>网格系统</span>
+                          <button
+                            type="button"
+                            className={`ab-switch${showSafeArea ? " is-on" : ""}`}
+                            role="switch"
+                            aria-checked={showSafeArea}
+                            aria-label={showSafeArea ? "隐藏动画书网格系统" : "显示动画书网格系统"}
+                            onClick={() => setShowSafeArea((visible) => !visible)}
                           >
-                            {Object.entries(CANVAS_ZOOM_PRESETS).map(([value, preset]) => (
-                              <option key={value} value={value}>{preset.label}</option>
-                            ))}
-                          </select>
-                          <ChevronDown size={14} aria-hidden="true" />
-                        </label>
-                      </div>
-                      <div className="ab-canvas-grid-toggle ab-editor-toolbar-grid" aria-label="动画书网格系统">
-                        <span>网格系统</span>
-                        <button
-                          type="button"
-                          className={`ab-switch${showSafeArea ? " is-on" : ""}`}
-                          role="switch"
-                          aria-checked={showSafeArea}
-                          aria-label={showSafeArea ? "隐藏动画书网格系统" : "显示动画书网格系统"}
-                          onClick={() => setShowSafeArea((visible) => !visible)}
-                        >
-                          <span className="ab-switch-thumb" />
-                        </button>
+                            <span className="ab-switch-thumb" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
