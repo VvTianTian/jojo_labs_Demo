@@ -1,0 +1,17 @@
+Generated using built-in image_gen, with the user's attached three-column screenshot as visual reference. Each PNG is one independent application state. These are raster design references, not editable Figma layers or approved product requirements.
+
+Shared prompt:
+Use case ui-mockup. Edit attached reference into ONE standalone full-screen state of the SAME JOJO Labs 学习笔记 desktop production app. Reference is edit target and exact visual/layout source. Preserve canvas aspect ratio 1586:992, white top header, project summary, three columns with separators at 19% and 69% width, compact typography, #0090D9 brand blue, neutral borders, small corners. Sharp readable Simplified Chinese. Keep title 《庄子成语·庖丁解牛》, 阅读高阶 L6 · 二十四单元 · 第二周. Left outline 笔记板块 and right 成品预览 with 日笔记/周笔记. C-end preview has pale grid paper 今日笔记 banner green and brown, green numbered section headings, white body. No new visual branding, no new illustrations, no redesign, no perspective, no outer presentation board, no state caption outside UI, no multiple screens or collage. Only show UI needed for the ONE requested state; remove the reference's open content-type popover unless requested. Only 词语 is required on good-word card, 拼音/释义/例句/配图 optional. Fill realistic short correct Chinese sample text. All actions not yet confirmed are visual concepts.
+
+State prompt briefs:
+01-empty: Empty initial teacher workspace, no sections selected, draft status, disabled submit, add-section entry and empty preview. Final correction removes residual selected-section title and tabs.
+02-add-block: Add-content-block popover with three ordinary image/text layouts and good-word, word and sentence card types.
+03-rich-text: Ordinary image/text block, layout selector, selected phrase, highlight menu, yellow emphasis block and gray tip block.
+04-word-card: Expanded good-word card with focused per-character pinyin, definition, example and optional image requirement.
+05-production-brief: Teacher image brief editor bound to the selected good-word card, optional reference image and supplemental notes.
+06-media-production: Producer read-only text context and image upload at 68 percent; no simultaneous error or success state.
+07-review-feedback: Reviewer role, selected content, one pending feedback comment, comment input and review actions. Proposed interaction pending confirmation.
+08-submit-validation: Missing required word, inline error and summary, outline error indicator, optional fields remain valid.
+
+Final correction prompt for 01:
+Edit ONLY the empty initial-state screenshot. Keep exact same layout, dimensions, colors, banner and all empty placeholders. Change project blue status pill 教研中 to 草稿. Change middle pane heading 好词好句 to 学习笔记. Remove the middle pane tabs 内容编辑 and 制作需求, because there is no selected section yet. Preserve empty left sidebar 尚未添加板块 with 添加板块 button, middle empty message 开始编写学习笔记 with 添加板块 button, right empty preview. Preserve disabled 提交制作. No other changes.
