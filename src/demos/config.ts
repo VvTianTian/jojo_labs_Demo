@@ -1,4 +1,4 @@
-import { BookOpen, GitBranch, ListChecks, Image, WandSparkles } from "lucide-react";
+import { BookOpen, GitBranch, ListChecks, Image, NotebookPen, WandSparkles } from "lucide-react";
 
 export interface DemoConfig {
   id: string;
@@ -10,6 +10,14 @@ export interface DemoConfig {
 }
 
 export const demos: DemoConfig[] = [
+  {
+    id: "learning-notes",
+    name: "学习笔记编辑器",
+    description: "分块编写学习笔记，同步预览学生端的「今日笔记」",
+    path: "/learning-notes",
+    icon: NotebookPen,
+    color: "brand",
+  },
   {
     id: "animation-book",
     name: "动画书生产工具",

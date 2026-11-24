@@ -6,6 +6,7 @@ import { FlowchartDemo } from "./demos/flowchart";
 import { CascaderSelectDemo } from "./demos/cascader-select";
 import { CoverGenerator } from "./demos/cover-generator";
 import { AnimationBookEditor } from "./demos/animation-book";
+import { LearningNotesEditor } from "./demos/learning-notes/LearningNotesEditor";
 import { trackPageView } from "./analytics";
 
 function AnalyticsTracker() {
@@ -30,6 +31,7 @@ function App() {
         <Route path="/cascader-select" element={<CascaderSelectDemo />} />
         <Route path="/cover-generator" element={<CoverGenerator />} />
         <Route path="/animation-book" element={<AnimationBookEditor />} />
+        <Route path="/learning-notes" element={<LearningNotesEditor />} />
       </Routes>
     </>
   );
