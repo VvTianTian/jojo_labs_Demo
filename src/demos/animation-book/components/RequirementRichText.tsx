@@ -17,6 +17,8 @@ interface RequirementRichTextProps {
   readOnly?: boolean;
   className?: string;
   placeholder?: string;
+  fieldLabel?: string;
+  basicToolbar?: boolean;
   autoFocus?: boolean;
   onFocus?: () => void;
   onBlur?: (event: FocusEvent<HTMLDivElement>) => void;
@@ -51,6 +53,8 @@ export function RequirementRichText({
   readOnly = false,
   className = "",
   placeholder = "描述画面、风格、构图或动效要求……",
+  fieldLabel = "图片或动效需求",
+  basicToolbar = false,
   autoFocus = false,
   onFocus,
   onBlur,
@@ -131,7 +135,7 @@ export function RequirementRichText({
 
   return (
     <div className={`ab-rich-text-editor ${className}`.trim()}>
-      <div className="ab-rich-text-toolbar" role="toolbar" aria-label="需求富文本工具栏">
+      <div className="ab-rich-text-toolbar" role="toolbar" aria-label={basicToolbar ? "富文本工具栏" : "需求富文本工具栏"}>
         <label className="ab-rich-text-color" title="文字颜色">
           <span>A</span>
           <Palette size={14} aria-hidden="true" />
@@ -141,12 +145,16 @@ export function RequirementRichText({
         <RichTextToolButton label="粗体" icon={<Bold size={14} />} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("bold")} />
         <RichTextToolButton label="斜体" icon={<Italic size={14} />} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("italic")} />
         <RichTextToolButton label="下划线" icon={<span className="ab-rich-text-letter-icon">U</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("underline")} />
-        <RichTextToolButton label="插入欧姆符号" icon={<span className="ab-rich-text-symbol-icon">Ω</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "Ω")} />
-        <RichTextToolButton label="插入求和符号" icon={<span className="ab-rich-text-symbol-icon">Σ</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "Σ")} />
-        <RichTextToolButton label="标注" icon={<span className="ab-rich-text-symbol-icon">✎</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "注")} />
-        <RichTextToolButton label="益智单位" icon={<span className="ab-rich-text-text-button">益智单位</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "益智单位")} />
-        <RichTextToolButton label="音标" icon={<span className="ab-rich-text-text-button">音标</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "音标")} />
-        <RichTextToolButton label="插入图片" icon={<ImagePlus size={14} />} onMouseDown={handleToolbarMouseDown} onClick={() => imageInputRef.current?.click()} />
+        {!basicToolbar && (
+          <>
+            <RichTextToolButton label="插入欧姆符号" icon={<span className="ab-rich-text-symbol-icon">Ω</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "Ω")} />
+            <RichTextToolButton label="插入求和符号" icon={<span className="ab-rich-text-symbol-icon">Σ</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "Σ")} />
+            <RichTextToolButton label="标注" icon={<span className="ab-rich-text-symbol-icon">✎</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "注")} />
+            <RichTextToolButton label="益智单位" icon={<span className="ab-rich-text-text-button">益智单位</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "益智单位")} />
+            <RichTextToolButton label="音标" icon={<span className="ab-rich-text-text-button">音标</span>} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("insertText", "音标")} />
+            <RichTextToolButton label="插入图片" icon={<ImagePlus size={14} />} onMouseDown={handleToolbarMouseDown} onClick={() => imageInputRef.current?.click()} />
+          </>
+        )}
         <RichTextToolButton label="清除格式" icon={<Eraser size={14} />} onMouseDown={handleToolbarMouseDown} onClick={() => runCommand("removeFormat")} />
       </div>
       <div
@@ -156,19 +164,25 @@ export function RequirementRichText({
         contentEditable
         suppressContentEditableWarning
         role="textbox"
-        aria-label="图片或动效需求"
+        aria-label={fieldLabel}
         aria-multiline="true"
         onInput={emitChange}
         onKeyUp={saveSelection}
         onMouseUp={saveSelection}
         onFocus={onFocus}
         onKeyDown={onKeyDown}
+        onPaste={basicToolbar ? (event) => {
+          event.preventDefault();
+          document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+          emitChange();
+        } : undefined}
+        onDrop={basicToolbar ? (event) => event.preventDefault() : undefined}
         onBlur={(event) => {
           saveSelection();
           onBlur?.(event);
         }}
       />
-      <input ref={imageInputRef} className="ab-hidden-input" type="file" accept="image/*" onChange={handleImageChange} />
+      {!basicToolbar && <input ref={imageInputRef} className="ab-hidden-input" type="file" accept="image/*" onChange={handleImageChange} />}
     </div>
   );
 }
